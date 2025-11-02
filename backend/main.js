@@ -36,6 +36,31 @@ const NFT_FACTORY_ABI = [
   "event CollectionCreated(address indexed collectionAddress, address indexed creator, string name, string symbol, string baseURI, uint256 timestamp)"
 ];
 
+// DAOFactory Contract Address
+const DAO_FACTORY_ADDRESS = '0xc6D49E765576134495ee49e572d5cBCb83a330Dc';
+
+// DAOFactory ABI
+const DAO_FACTORY_ABI = [
+  "function createDAO(string memory _name, uint256 _votingPeriod, uint256 _quorumPercentage) external returns (address)",
+  "function getDAOCount() external view returns (uint256)",
+  "function getCreatorDAOs(address _creator) external view returns (address[] memory)",
+  "function getAllDAOs() external view returns (address[] memory)",
+  "event DAOCreated(address indexed daoAddress, string name, address indexed creator, uint256 votingPeriod, uint256 quorumPercentage, uint256 timestamp)"
+];
+
+// DAO ABI (for interacting with created DAOs)
+const DAO_ABI = [
+  "function name() external view returns (string memory)",
+  "function owner() external view returns (address)",
+  "function memberCount() external view returns (uint256)",
+  "function votingPeriod() external view returns (uint256)",
+  "function quorumPercentage() external view returns (uint256)",
+  "function proposalCount() external view returns (uint256)",
+  "function getTotalVotingPower() public view returns (uint256)",
+  "function getAllMembers() external view returns (address[] memory)",
+  "function getMemberInfo(address _member) external view returns (bool isMember, uint256 votingPower, uint256 joinedAt)"
+];
+
 // ERC20 Token Contract Source
 const TOKEN_CONTRACT_SOURCE = `
 // SPDX-License-Identifier: MIT
@@ -1190,6 +1215,204 @@ app.post('/create-and-mint-nft', async (req, res) => {
 
   } catch (error) {
     console.error('Create and mint NFT error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
+  }
+});
+
+// Create DAO endpoint using DAOFactory
+app.post('/create-dao', async (req, res) => {
+  try {
+    const { 
+      privateKey,
+      name,
+      votingPeriod, // in seconds (e.g., 604800 for 7 days)
+      quorumPercentage // percentage (e.g., 51 for 51%)
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !name || !votingPeriod || !quorumPercentage) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, name, votingPeriod, quorumPercentage'
+      });
+    }
+
+    // Validate quorum percentage (should be between 0 and 100)
+    const quorum = Number(quorumPercentage);
+    if (isNaN(quorum) || quorum < 0 || quorum > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'quorumPercentage must be a number between 0 and 100'
+      });
+    }
+
+    // Validate voting period (should be positive)
+    const votingPeriodNum = Number(votingPeriod);
+    if (isNaN(votingPeriodNum) || votingPeriodNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'votingPeriod must be a positive number (in seconds)'
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Check balance for gas
+    const balance = await provider.getBalance(wallet.address);
+    console.log('Wallet balance:', ethers.formatEther(balance), 'STT');
+    
+    if (balance === 0n) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance for gas fees',
+        currentBalance: ethers.formatEther(balance),
+        required: 'Some testnet tokens for gas'
+      });
+    }
+
+    console.log('Creating DAO via DAOFactory:', { name, votingPeriod, quorumPercentage });
+    console.log('Factory address:', DAO_FACTORY_ADDRESS);
+
+    // Connect to DAOFactory contract
+    const factory = new ethers.Contract(DAO_FACTORY_ADDRESS, DAO_FACTORY_ABI, wallet);
+
+    // Convert to BigInt
+    const votingPeriodBigInt = BigInt(votingPeriod.toString());
+    const quorumPercentageBigInt = BigInt(quorumPercentage.toString());
+
+    // Estimate gas before sending transaction
+    console.log('Estimating gas for createDAO...');
+    let gasEstimate;
+    let estimatedCost = null;
+    try {
+      gasEstimate = await factory.createDAO.estimateGas(name, votingPeriodBigInt, quorumPercentageBigInt);
+      console.log('Estimated gas:', gasEstimate.toString());
+      
+      // Get current gas price for informational purposes only
+      const feeData = await provider.getFeeData();
+      const gasPrice = feeData.gasPrice || feeData.maxFeePerGas;
+      
+      if (gasPrice && gasPrice > 0n) {
+        estimatedCost = gasEstimate * gasPrice;
+        console.log('Estimated transaction cost:', ethers.formatEther(estimatedCost), 'STT');
+        console.log('Gas price:', ethers.formatUnits(gasPrice, 'gwei'), 'gwei');
+        
+        if (balance < estimatedCost) {
+          console.warn('⚠️  Warning: Balance may be insufficient for transaction');
+          console.warn('   Balance:', ethers.formatEther(balance), 'STT');
+          console.warn('   Estimated cost:', ethers.formatEther(estimatedCost), 'STT');
+        }
+      }
+    } catch (estimateError) {
+      console.warn('Gas estimation failed (will proceed anyway):', estimateError.message);
+      gasEstimate = null;
+    }
+
+    // Create DAO via factory with estimated gas
+    console.log('Sending createDAO transaction...');
+    let tx;
+    if (gasEstimate) {
+      // Add 20% buffer to gas estimate
+      const gasLimit = (gasEstimate * 120n) / 100n;
+      console.log('Using gas limit:', gasLimit.toString());
+      tx = await factory.createDAO(name, votingPeriodBigInt, quorumPercentageBigInt, { gasLimit });
+    } else {
+      // Let ethers estimate automatically if our estimation failed
+      tx = await factory.createDAO(name, votingPeriodBigInt, quorumPercentageBigInt);
+    }
+    console.log('Transaction hash:', tx.hash);
+    console.log('Waiting for confirmation...');
+
+    // Wait for the transaction to be mined
+    const receipt = await tx.wait();
+    console.log('Transaction confirmed in block:', receipt.blockNumber);
+
+    // Parse the DAOCreated event to get the DAO address
+    const factoryInterface = new ethers.Interface(DAO_FACTORY_ABI);
+    let daoAddress = null;
+    
+    for (const log of receipt.logs) {
+      try {
+        const parsedLog = factoryInterface.parseLog(log);
+        if (parsedLog && parsedLog.name === 'DAOCreated') {
+          daoAddress = parsedLog.args.daoAddress;
+          break;
+        }
+      } catch (e) {
+        // Not the event we're looking for
+      }
+    }
+
+    if (!daoAddress) {
+      throw new Error('DAOCreated event not found in transaction receipt. DAO creation may have failed.');
+    }
+
+    console.log('✅ DAO created at address:', daoAddress);
+
+    // Get DAO info from the created contract
+    let daoInfo = null;
+    try {
+      const daoContract = new ethers.Contract(daoAddress, DAO_ABI, provider);
+      daoInfo = {
+        name: await daoContract.name(),
+        owner: await daoContract.owner(),
+        memberCount: (await daoContract.memberCount()).toString(),
+        votingPeriod: (await daoContract.votingPeriod()).toString(),
+        quorumPercentage: (await daoContract.quorumPercentage()).toString(),
+        proposalCount: (await daoContract.proposalCount()).toString(),
+        totalVotingPower: (await daoContract.getTotalVotingPower()).toString()
+      };
+    } catch (infoError) {
+      console.warn('Could not fetch DAO info:', infoError.message);
+      // Fallback to basic info
+      daoInfo = {
+        name: name,
+        votingPeriod: votingPeriod.toString(),
+        quorumPercentage: quorumPercentage.toString()
+      };
+    }
+
+    // Calculate voting period in days for readability
+    const votingPeriodDays = votingPeriodNum / (24 * 60 * 60);
+
+    return res.json({
+      success: true,
+      message: 'DAO created successfully via DAOFactory',
+      dao: {
+        address: daoAddress,
+        name: daoInfo.name || name,
+        owner: daoInfo.owner || wallet.address,
+        memberCount: daoInfo.memberCount || '0',
+        votingPeriod: {
+          seconds: votingPeriod.toString(),
+          days: votingPeriodDays.toFixed(2)
+        },
+        quorumPercentage: daoInfo.quorumPercentage || quorumPercentage.toString(),
+        proposalCount: daoInfo.proposalCount || '0',
+        totalVotingPower: daoInfo.totalVotingPower || '0'
+      },
+      creator: wallet.address,
+      factoryAddress: DAO_FACTORY_ADDRESS,
+      transactionHash: tx.hash,
+      blockNumber: receipt.blockNumber,
+      gasUsed: receipt.gasUsed.toString(),
+      explorerUrl: `https://shannon-explorer.somnia.network/tx/${tx.hash}`,
+      nextSteps: [
+        `Your DAO is live at: ${daoAddress}`,
+        `Add members using addMember or addMembers functions`,
+        `Create proposals using createProposal function`,
+        `Members can vote using vote function`,
+        `Execute proposals after voting period ends using executeProposal`
+      ]
+    });
+
+  } catch (error) {
+    console.error('Create DAO error:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
