@@ -61,6 +61,16 @@ const DAO_ABI = [
   "function getMemberInfo(address _member) external view returns (bool isMember, uint256 votingPower, uint256 joinedAt)"
 ];
 
+// Airdrop Contract Address
+const AIRDROP_CONTRACT_ADDRESS = '0x70F3147fa7971033312911a59579f18Ff0FE26F9';
+
+// Airdrop Contract ABI
+const AIRDROP_ABI = [
+  "function airdrop(address[] calldata recipients, uint256 amount) payable",
+  "function getBalance() view returns (uint256)",
+  "event AirdropExecuted(address indexed executor, address[] recipients, uint256 amount, uint256 totalAmount, uint256 timestamp)"
+];
+
 // ERC20 Token Contract Source
 const TOKEN_CONTRACT_SOURCE = `
 // SPDX-License-Identifier: MIT
@@ -1686,6 +1696,175 @@ app.get('/balance/:address', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Airdrop endpoint - batch transfer STT tokens to multiple addresses
+app.post('/airdrop', async (req, res) => {
+  try {
+    const { 
+      privateKey, 
+      recipients, 
+      amount 
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !recipients || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, recipients, amount'
+      });
+    }
+
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'recipients must be a non-empty array of addresses'
+      });
+    }
+
+    if (Number(amount) <= 0 || isNaN(Number(amount))) {
+      return res.status(400).json({
+        success: false,
+        error: 'amount must be a positive number'
+      });
+    }
+
+    // Validate all recipient addresses
+    const invalidAddresses = recipients.filter(addr => !ethers.isAddress(addr));
+    if (invalidAddresses.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid recipient addresses found',
+        invalidAddresses: invalidAddresses
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Check wallet balance
+    const walletBalance = await provider.getBalance(wallet.address);
+    const amountPerRecipient = ethers.parseEther(amount.toString());
+    const totalAmount = amountPerRecipient * BigInt(recipients.length);
+
+    console.log('Airdrop request:', {
+      from: wallet.address,
+      recipients: recipients.length,
+      amountPerRecipient: amount,
+      totalAmount: ethers.formatEther(totalAmount)
+    });
+
+    if (walletBalance < totalAmount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance',
+        walletBalance: ethers.formatEther(walletBalance),
+        required: ethers.formatEther(totalAmount),
+        shortage: ethers.formatEther(totalAmount - walletBalance)
+      });
+    }
+
+    // Connect to Airdrop contract
+    const airdropContract = new ethers.Contract(AIRDROP_CONTRACT_ADDRESS, AIRDROP_ABI, wallet);
+
+    // Estimate gas
+    console.log('Estimating gas for airdrop...');
+    let gasEstimate;
+    try {
+      gasEstimate = await airdropContract.airdrop.estimateGas(recipients, amountPerRecipient, {
+        value: totalAmount
+      });
+      console.log('Estimated gas:', gasEstimate.toString());
+    } catch (estimateError) {
+      console.warn('Gas estimation failed (will proceed anyway):', estimateError.message);
+      gasEstimate = null;
+    }
+
+    // Execute airdrop
+    console.log('Executing airdrop transaction...');
+    let tx;
+    if (gasEstimate) {
+      // Add 20% buffer to gas estimate
+      const gasLimit = (gasEstimate * 120n) / 100n;
+      tx = await airdropContract.airdrop(recipients, amountPerRecipient, {
+        value: totalAmount,
+        gasLimit
+      });
+    } else {
+      tx = await airdropContract.airdrop(recipients, amountPerRecipient, {
+        value: totalAmount
+      });
+    }
+
+    console.log('Transaction hash:', tx.hash);
+    console.log('Waiting for confirmation...');
+
+    // Wait for the transaction to be mined
+    const receipt = await tx.wait();
+    console.log('Transaction confirmed in block:', receipt.blockNumber);
+
+    // Parse the AirdropExecuted event
+    const contractInterface = new ethers.Interface(AIRDROP_ABI);
+    let eventData = null;
+    
+    for (const log of receipt.logs) {
+      try {
+        const parsedLog = contractInterface.parseLog(log);
+        if (parsedLog && parsedLog.name === 'AirdropExecuted') {
+          eventData = parsedLog.args;
+          break;
+        }
+      } catch (e) {
+        // Not the event we're looking for
+      }
+    }
+
+    // Check contract balance after airdrop (should be 0 or minimal)
+    const contractBalance = await airdropContract.getBalance();
+
+    // Get final wallet balance
+    const walletBalanceAfter = await provider.getBalance(wallet.address);
+    const balanceUsed = walletBalance - walletBalanceAfter;
+
+    return res.json({
+      success: true,
+      message: 'Airdrop executed successfully',
+      airdrop: {
+        from: wallet.address,
+        recipientsCount: recipients.length,
+        recipients: recipients,
+        amountPerRecipient: amount,
+        amountPerRecipientWei: amountPerRecipient.toString(),
+        totalAmount: ethers.formatEther(totalAmount),
+        totalAmountWei: totalAmount.toString()
+      },
+      transaction: {
+        hash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString(),
+        explorerUrl: `https://shannon-explorer.somnia.network/tx/${receipt.hash}`
+      },
+      balances: {
+        walletBefore: ethers.formatEther(walletBalance),
+        walletAfter: ethers.formatEther(walletBalanceAfter),
+        balanceUsed: ethers.formatEther(balanceUsed),
+        contractBalance: ethers.formatEther(contractBalance)
+      },
+      event: eventData ? {
+        executor: eventData.executor,
+        totalAmount: eventData.totalAmount.toString(),
+        timestamp: new Date(Number(eventData.timestamp) * 1000).toISOString()
+      } : null
+    });
+
+  } catch (error) {
+    console.error('Airdrop error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
   }
 });
 
