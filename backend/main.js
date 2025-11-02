@@ -1432,6 +1432,97 @@ app.post('/create-dao', async (req, res) => {
   }
 });
 
+// Swap helper functions (from swap.js)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function getTokenDecimals(contract) {
+  try {
+    return await contract.decimals();
+  } catch {
+    return 18; // Default to 18 if call fails
+  }
+}
+
+async function checkBalance(tokenContract, walletAddress, amountWei, decimals) {
+  const balance = await tokenContract.balanceOf(walletAddress);
+  const balanceReadable = ethers.formatUnits(balance, decimals);
+  
+  console.log(`Token balance: ${balanceReadable}`);
+  
+  if (balance < amountWei) {
+    const amountReadable = ethers.formatUnits(amountWei, decimals);
+    console.log(`❌ Insufficient balance! Need ${amountReadable} but have ${balanceReadable}`);
+    return false;
+  }
+  return true;
+}
+
+async function approveToken(tokenContract, spenderAddress, amountWei, wallet, decimals) {
+  // Check current allowance (for info only)
+  const currentAllowance = await tokenContract.allowance(wallet.address, spenderAddress);
+  console.log(`Current allowance: ${ethers.formatUnits(currentAllowance, decimals)}`);
+  
+  // If allowance is sufficient, skip approval
+  if (currentAllowance >= amountWei) {
+    console.log('✅ Sufficient allowance already exists');
+    return { hash: null, success: true };
+  }
+  
+  console.log("Approving tokens...");
+  
+  // Estimate gas
+  let gasLimit;
+  try {
+    const gasEstimate = await tokenContract.approve.estimateGas(spenderAddress, amountWei);
+    gasLimit = gasEstimate * 120n / 100n; // Add 20% buffer
+  } catch (e) {
+    console.log(`⚠ Gas estimation failed, using fallback: 100000`);
+    gasLimit = 100000;
+  }
+  
+  // Send approve transaction
+  const tx = await tokenContract.approve(spenderAddress, amountWei, {
+    gasLimit: gasLimit
+  });
+  
+  console.log(`Transaction sent: ${tx.hash}`);
+  const receipt = await tx.wait();
+  
+  console.log(`✓ Approved: ${receipt.hash}`);
+  console.log(`  Gas used: ${receipt.gasUsed.toString()}\n`);
+  
+  await sleep(3000); // Wait for state sync
+  return { hash: receipt.hash, success: receipt.status === 1 };
+}
+
+async function swapUniswapV3(swapContract, tokenIn, tokenOut, amountWei, amountOutMin, fee, wallet) {
+  const params = {
+    tokenIn: tokenIn,
+    tokenOut: tokenOut,
+    fee: fee,
+    recipient: wallet.address,
+    amountIn: amountWei,
+    amountOutMinimum: amountOutMin,
+    sqrtPriceLimitX96: 0
+  };
+  
+  return swapContract.exactInputSingle.populateTransaction(params);
+}
+
+async function swapUniswapV2(swapContract, tokenIn, tokenOut, amountWei, amountOutMin, wallet) {
+  const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 minutes
+  const path = [tokenIn, tokenOut];
+  
+  return swapContract.swapExactTokensForTokens.populateTransaction(
+    amountWei,
+    amountOutMin,
+    path,
+    wallet.address,
+    deadline
+  );
+}
+
+// Enhanced swap endpoint using swap.js logic
 app.post('/swap', async (req, res) => {
   try {
     const { 
@@ -1439,7 +1530,9 @@ app.post('/swap', async (req, res) => {
       tokenIn, 
       tokenOut, 
       amountIn, 
-      slippageTolerance = 3 
+      slippageTolerance = 5,
+      poolFee = 500,
+      routerType = 'uniswap_v3'
     } = req.body;
 
     if (!privateKey || !tokenIn || !tokenOut || !amountIn) {
@@ -1453,197 +1546,154 @@ app.post('/swap', async (req, res) => {
     const wallet = new ethers.Wallet(privateKey, provider);
 
     const SWAP_ROUTER_ADDRESS = '0x6aac14f090a35eea150705f72d90e4cdc4a49b2c';
-    const FEE = 500;
 
     const TOKEN_ABI = [
       'function approve(address spender, uint256 amount) returns (bool)',
-      'function decimals() view returns (uint8)',
-      'function allowance(address owner, address spender) view returns (uint256)'
+      'function allowance(address owner, address spender) view returns (uint256)',
+      'function balanceOf(address account) view returns (uint256)',
+      'function decimals() view returns (uint8)'
     ];
 
-    const SWAP_ROUTER_ABI = [
-      {
-        "inputs": [
-          {
-            "components": [
-              {"name": "tokenIn", "type": "address"},
-              {"name": "tokenOut", "type": "address"},
-              {"name": "fee", "type": "uint24"},
-              {"name": "recipient", "type": "address"},
-              {"name": "amountIn", "type": "uint256"},
-              {"name": "amountOutMinimum", "type": "uint256"},
-              {"name": "sqrtPriceLimitX96", "type": "uint160"}
-            ],
-            "name": "params",
-            "type": "tuple"
-          }
-        ],
-        "name": "exactInputSingle",
-        "outputs": [{"name": "amountOut", "type": "uint256"}],
-        "stateMutability": "payable",
-        "type": "function"
-      }
+    const UNISWAP_V3_ROUTER_ABI = [
+      'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut)'
     ];
 
-    const tokenContract = new ethers.Contract(tokenIn, TOKEN_ABI, wallet);
-    const decimals = await tokenContract.decimals();
-    const amountInWei = ethers.parseUnits(amountIn.toString(), decimals);
+    const UNISWAP_V2_ROUTER_ABI = [
+      'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[] amounts)'
+    ];
 
-    const amountOutMin = (amountInWei * BigInt(100 - slippageTolerance)) / BigInt(100);
+    console.log(`🔍 Swap request from ${wallet.address}`);
+    console.log(`   Token In: ${tokenIn}`);
+    console.log(`   Token Out: ${tokenOut}`);
+    console.log(`   Amount: ${amountIn}`);
+    console.log(`   Router Type: ${routerType}`);
 
-    const currentAllowance = await tokenContract.allowance(wallet.address, SWAP_ROUTER_ADDRESS);
-    
-    let approveTxHash = null;
-    if (currentAllowance < amountInWei) {
-      console.log('Approving token...');
-      const approveTx = await tokenContract.approve(SWAP_ROUTER_ADDRESS, amountInWei);
-      const approveReceipt = await approveTx.wait();
-      approveTxHash = approveReceipt.hash;
-      console.log('Approval successful:', approveTxHash);
-    }
+    // Create token contracts
+    const tokenInContract = new ethers.Contract(tokenIn, TOKEN_ABI, wallet);
+    const tokenOutContract = new ethers.Contract(tokenOut, TOKEN_ABI, wallet);
 
-    const swapRouter = new ethers.Contract(SWAP_ROUTER_ADDRESS, SWAP_ROUTER_ABI, wallet);
+    // Get token decimals
+    const decimalsIn = await getTokenDecimals(tokenInContract);
+    const decimalsOut = await getTokenDecimals(tokenOutContract);
 
-    const swapParams = {
-      tokenIn: tokenIn,
-      tokenOut: tokenOut,
-      fee: FEE,
-      recipient: wallet.address,
-      amountIn: amountInWei,
-      amountOutMinimum: amountOutMin,
-      sqrtPriceLimitX96: 0
-    };
+    console.log(`Token IN decimals: ${decimalsIn}`);
+    console.log(`Token OUT decimals: ${decimalsOut}`);
 
-    const swapTx = await swapRouter.exactInputSingle(
-      swapParams,
-      {
-        gasLimit: 500000
-      }
+    // Parse amounts
+    const amountInWei = ethers.parseUnits(amountIn.toString(), decimalsIn);
+    const amountOutMin = ethers.parseUnits(
+      (Number(amountIn) * (100 - slippageTolerance) / 100).toString(),
+      decimalsOut
     );
 
-    const swapReceipt = await swapTx.wait();
+    // Approve first
+    const approveResult = await approveToken(
+      tokenInContract,
+      SWAP_ROUTER_ADDRESS,
+      amountInWei,
+      wallet,
+      decimalsIn
+    );
 
-    return res.json({
-      success: true,
-      wallet: wallet.address,
-      tokenIn,
-      tokenOut,
-      amountIn: amountIn.toString(),
-      slippageTolerance,
-      approveTxHash,
-      swapTxHash: swapReceipt.hash,
-      blockNumber: swapReceipt.blockNumber,
-      gasUsed: swapReceipt.gasUsed.toString(),
-      explorerUrl: `https://shannon-explorer.somnia.network/tx/${swapReceipt.hash}`
-    });
-
-  } catch (error) {
-    console.error('Swap error:', error);
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      details: error.reason || error.code
-    });
-  }
-});
-
-app.post('/swap-ping-pong', async (req, res) => {
-  try {
-    const { privateKey, amount, slippageTolerance = 3 } = req.body;
-
-    if (!privateKey || !amount) {
+    if (!approveResult.success) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: privateKey, amount'
+        error: 'Token approval failed'
       });
     }
 
-    const PING_ADDRESS = '0xbecd9b5f373877881d91cbdbaf013d97eb532154';
-    const PONG_ADDRESS = '0x7968ac15a72629e05f41b8271e4e7292e0cc9f90';
-
-    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
-    const wallet = new ethers.Wallet(privateKey, provider);
-
-    const SWAP_ROUTER_ADDRESS = '0x6aac14f090a35eea150705f72d90e4cdc4a49b2c';
-    const FEE = 500;
-
-    const TOKEN_ABI = [
-      'function approve(address spender, uint256 amount) returns (bool)',
-      'function decimals() view returns (uint8)',
-      'function allowance(address owner, address spender) view returns (uint256)'
-    ];
-
-    const SWAP_ROUTER_ABI = [
-      {
-        "inputs": [
-          {
-            "components": [
-              {"name": "tokenIn", "type": "address"},
-              {"name": "tokenOut", "type": "address"},
-              {"name": "fee", "type": "uint24"},
-              {"name": "recipient", "type": "address"},
-              {"name": "amountIn", "type": "uint256"},
-              {"name": "amountOutMinimum", "type": "uint256"},
-              {"name": "sqrtPriceLimitX96", "type": "uint160"}
-            ],
-            "name": "params",
-            "type": "tuple"
-          }
-        ],
-        "name": "exactInputSingle",
-        "outputs": [{"name": "amountOut", "type": "uint256"}],
-        "stateMutability": "payable",
-        "type": "function"
-      }
-    ];
-
-    const tokenContract = new ethers.Contract(PING_ADDRESS, TOKEN_ABI, wallet);
-    const decimals = await tokenContract.decimals();
-    const amountInWei = ethers.parseUnits(amount.toString(), decimals);
-    const amountOutMin = (amountInWei * BigInt(100 - slippageTolerance)) / BigInt(100);
-
-    const currentAllowance = await tokenContract.allowance(wallet.address, SWAP_ROUTER_ADDRESS);
-    
-    let approveTxHash = null;
-    if (currentAllowance < amountInWei) {
-      const approveTx = await tokenContract.approve(SWAP_ROUTER_ADDRESS, amountInWei);
-      const approveReceipt = await approveTx.wait();
-      approveTxHash = approveReceipt.hash;
+    // Check balance after approval
+    if (!(await checkBalance(tokenInContract, wallet.address, amountInWei, decimalsIn))) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient token balance'
+      });
     }
 
-    const swapRouter = new ethers.Contract(SWAP_ROUTER_ADDRESS, SWAP_ROUTER_ABI, wallet);
+    // Build swap transaction based on router type
+    console.log("Building swap transaction...");
+    let swapTx;
+    let swapContract;
 
-    const swapParams = {
-      tokenIn: PING_ADDRESS,
-      tokenOut: PONG_ADDRESS,
-      fee: FEE,
-      recipient: wallet.address,
-      amountIn: amountInWei,
-      amountOutMinimum: amountOutMin,
-      sqrtPriceLimitX96: 0
-    };
-
-    const swapTx = await swapRouter.exactInputSingle(
-      swapParams,
-      {
-        gasLimit: 500000
+    try {
+      if (routerType === 'uniswap_v3') {
+        swapContract = new ethers.Contract(SWAP_ROUTER_ADDRESS, UNISWAP_V3_ROUTER_ABI, wallet);
+        swapTx = await swapUniswapV3(
+          swapContract,
+          tokenIn,
+          tokenOut,
+          amountInWei,
+          amountOutMin,
+          poolFee,
+          wallet
+        );
+      } else if (routerType === 'uniswap_v2') {
+        swapContract = new ethers.Contract(SWAP_ROUTER_ADDRESS, UNISWAP_V2_ROUTER_ABI, wallet);
+        swapTx = await swapUniswapV2(
+          swapContract,
+          tokenIn,
+          tokenOut,
+          amountInWei,
+          amountOutMin,
+          wallet
+        );
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: `Unknown router type: ${routerType}. Use 'uniswap_v3' or 'uniswap_v2'`
+        });
       }
-    );
 
-    const swapReceipt = await swapTx.wait();
+      // Estimate gas
+      try {
+        const gasEstimate = await provider.estimateGas({
+          ...swapTx,
+          from: wallet.address
+        });
+        
+        const gasLimit = gasEstimate * 150n / 100n; // Add 50% buffer
+        console.log(`Estimated gas: ${gasEstimate.toString()}, Using: ${gasLimit.toString()}`);
+        
+        swapTx.gasLimit = gasLimit;
+      } catch (e) {
+        console.log(`⚠ Gas estimation failed: ${e.message.substring(0, 150)}`);
+        console.log("Using fallback gas: 1000000");
+        swapTx.gasLimit = 1000000;
+      }
 
-    return res.json({
-      success: true,
-      wallet: wallet.address,
-      swap: '$PING -> $PONG',
-      amount: amount.toString(),
-      slippageTolerance,
-      approveTxHash,
-      swapTxHash: swapReceipt.hash,
-      blockNumber: swapReceipt.blockNumber,
-      gasUsed: swapReceipt.gasUsed.toString(),
-      explorerUrl: `https://shannon-explorer.somnia.network/tx/${swapReceipt.hash}`
-    });
+    } catch (e) {
+      throw new Error(`Failed to build swap transaction: ${e.message}`);
+    }
+
+    // Execute swap
+    console.log("Executing swap...");
+    
+    const tx = await wallet.sendTransaction(swapTx);
+    console.log(`Transaction sent: ${tx.hash}`);
+    
+    const receipt = await tx.wait();
+
+    if (receipt.status === 1) {
+      return res.json({
+        success: true,
+        wallet: wallet.address,
+        tokenIn,
+        tokenOut,
+        amountIn: amountIn.toString(),
+        slippageTolerance,
+        routerType,
+        approveTxHash: approveResult.hash,
+        swapTxHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString(),
+        explorerUrl: `https://shannon-explorer.somnia.network/tx/${receipt.hash}`
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: 'Swap transaction failed'
+      });
+    }
 
   } catch (error) {
     console.error('Swap error:', error);
@@ -1962,6 +2012,108 @@ app.post('/token-price', async (req, res) => {
       error: error.message || 'Error fetching token prices',
       details: error.response?.data || error.code
     });
+  }
+});
+
+// ERC-20 balance endpoint - fetch ERC-20 token balances from Somnia API
+app.post('/api/balance/erc20', async (req, res) => {
+  try {
+    const { address } = req.body;
+
+    // Validation
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: address'
+      });
+    }
+
+    // Validate address format
+    if (!ethers.isAddress(address)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid wallet address format'
+      });
+    }
+
+    // Somnia API endpoint
+    const somniaApiUrl = `https://api.subgraph.somnia.network/public_api/data_api/somnia/v1/address/${address}/balance/erc20`;
+    
+    console.log(`🔍 Fetching ERC-20 balances for address: ${address}`);
+    console.log(`📡 API URL: ${somniaApiUrl}`);
+
+    // Prepare headers
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    // Load bearer token from .env file
+    const bearerToken = process.env.BEARER_TOKEN || process.env.ORMI_API_KEY || process.env.PRIVATE_KEY;
+    if (bearerToken) {
+      headers['Authorization'] = `Bearer ${bearerToken}`;
+      console.log('🔑 Using bearer token authentication');
+    } else {
+      console.log('⚠️  No bearer token found in .env - making unauthenticated request');
+      console.log('   Set BEARER_TOKEN, ORMI_API_KEY, or PRIVATE_KEY in your .env file');
+    }
+
+    // Make GET request to Somnia API
+    const response = await axios.get(somniaApiUrl, {
+      headers: headers,
+      timeout: 30000 // 30 second timeout
+    });
+
+    console.log(`✅ API Response Status: ${response.status}`);
+    
+    // Check if API returned an error in the response body
+    if (response.data && response.data.code && response.data.code !== 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'API returned an error',
+        apiError: {
+          code: response.data.code,
+          message: response.data.msg,
+          data: response.data.data
+        },
+        rawResponse: response.data
+      });
+    }
+
+    // Return the API response
+    return res.json({
+      success: true,
+      address: address,
+      data: response.data,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('ERC-20 balance fetch error:', error);
+    
+    // Handle axios errors
+    if (error.response) {
+      // API returned an error status
+      return res.status(error.response.status || 500).json({
+        success: false,
+        error: 'Error fetching ERC-20 balances from Somnia API',
+        apiResponse: error.response.data,
+        status: error.response.status
+      });
+    } else if (error.request) {
+      // Request was made but no response received
+      return res.status(500).json({
+        success: false,
+        error: 'No response from Somnia API',
+        message: error.message
+      });
+    } else {
+      // Error setting up the request
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Error fetching ERC-20 balances'
+      });
+    }
   }
 });
 
