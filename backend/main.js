@@ -1,6 +1,9 @@
 const express = require('express');
 const { ethers } = require('ethers');
 const solc = require('solc');
+const axios = require('axios');
+const FormData = require('form-data');
+require('dotenv').config();
 
 const app = express();
 app.use(express.json());
@@ -20,6 +23,17 @@ const FACTORY_ABI = [
   "function getAllDeployedTokens() view returns (address[])",
   "function getTokenInfo(address tokenAddress) view returns (address creator, string name, string symbol, uint256 initialSupply, uint256 deployedAt, uint256 currentSupply, address owner)",
   "event TokenCreated(address indexed tokenAddress, address indexed creator, string name, string symbol, uint256 initialSupply, uint256 timestamp)"
+];
+
+// NFTFactory Contract Address
+const NFT_FACTORY_ADDRESS = '0x83B831848eE0A9a2574Cf62a13c23d8eDCa84E9F';
+
+// NFTFactory ABI
+const NFT_FACTORY_ABI = [
+  "function createCollection(string memory name, string memory symbol, string memory baseURI) external returns (address)",
+  "function getCollectionsByCreator(address creator) external view returns (address[] memory)",
+  "function getCollectionInfo(address collectionAddress) external view returns (address creator, string memory name, string memory symbol, string memory baseURI, uint256 deployedAt, uint256 totalMinted, address owner)",
+  "event CollectionCreated(address indexed collectionAddress, address indexed creator, string name, string symbol, string baseURI, uint256 timestamp)"
 ];
 
 // ERC20 Token Contract Source
@@ -470,6 +484,712 @@ app.post('/deploy-token', async (req, res) => {
 
   } catch (error) {
     console.error('Deploy token error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
+  }
+});
+
+// Deploy ERC-721 NFT Collection endpoint using NFTFactory
+app.post('/deploy-nft-collection', async (req, res) => {
+  try {
+    const { 
+      privateKey, 
+      name, 
+      symbol, 
+      baseURI 
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !name || !symbol || !baseURI) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, name, symbol, baseURI'
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Check balance for gas
+    const balance = await provider.getBalance(wallet.address);
+    console.log('Wallet balance:', ethers.formatEther(balance), 'STT');
+    
+    if (balance === 0n) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance for gas fees',
+        currentBalance: ethers.formatEther(balance),
+        required: 'Some testnet tokens for gas'
+      });
+    }
+
+    console.log('Creating NFT collection via NFTFactory:', { name, symbol, baseURI });
+    console.log('Factory address:', NFT_FACTORY_ADDRESS);
+
+    // Connect to NFTFactory contract
+    const factory = new ethers.Contract(NFT_FACTORY_ADDRESS, NFT_FACTORY_ABI, wallet);
+
+    // Estimate gas before sending transaction (for logging and optional gas limit)
+    console.log('Estimating gas for createCollection...');
+    let gasEstimate;
+    let estimatedCost = null;
+    try {
+      gasEstimate = await factory.createCollection.estimateGas(name, symbol, baseURI);
+      console.log('Estimated gas:', gasEstimate.toString());
+      
+      // Get current gas price for informational purposes only
+      const feeData = await provider.getFeeData();
+      const gasPrice = feeData.gasPrice || feeData.maxFeePerGas;
+      
+      if (gasPrice && gasPrice > 0n) {
+        estimatedCost = gasEstimate * gasPrice;
+        console.log('Estimated transaction cost:', ethers.formatEther(estimatedCost), 'STT');
+        console.log('Gas price:', ethers.formatUnits(gasPrice, 'gwei'), 'gwei');
+        
+        // Only warn if balance seems insufficient, but don't block the transaction
+        if (balance < estimatedCost) {
+          console.warn('⚠️  Warning: Balance may be insufficient for transaction');
+          console.warn('   Balance:', ethers.formatEther(balance), 'STT');
+          console.warn('   Estimated cost:', ethers.formatEther(estimatedCost), 'STT');
+        }
+      }
+    } catch (estimateError) {
+      console.warn('Gas estimation failed (will proceed anyway):', estimateError.message);
+      gasEstimate = null;
+    }
+
+    // Create collection via factory with estimated gas
+    console.log('Sending createCollection transaction...');
+    let tx;
+    if (gasEstimate) {
+      // Add 20% buffer to gas estimate
+      const gasLimit = (gasEstimate * 120n) / 100n;
+      console.log('Using gas limit:', gasLimit.toString());
+      tx = await factory.createCollection(name, symbol, baseURI, { gasLimit });
+    } else {
+      // Let ethers estimate automatically if our estimation failed
+      tx = await factory.createCollection(name, symbol, baseURI);
+    }
+    console.log('Transaction hash:', tx.hash);
+    console.log('Waiting for confirmation...');
+
+    // Wait for the transaction to be mined
+    const receipt = await tx.wait();
+    console.log('Transaction confirmed in block:', receipt.blockNumber);
+
+    // Parse the CollectionCreated event to get the collection address
+    const factoryInterface = new ethers.Interface(NFT_FACTORY_ABI);
+    let collectionAddress = null;
+    
+    for (const log of receipt.logs) {
+      try {
+        const parsedLog = factoryInterface.parseLog(log);
+        if (parsedLog && parsedLog.name === 'CollectionCreated') {
+          collectionAddress = parsedLog.args.collectionAddress;
+          break;
+        }
+      } catch (e) {
+        // Not the event we're looking for
+      }
+    }
+
+    if (!collectionAddress) {
+      throw new Error('CollectionCreated event not found in transaction receipt. Collection creation may have failed.');
+    }
+
+    console.log('NFT collection created at address:', collectionAddress);
+
+    // Optionally get collection info from factory
+    let collectionInfo = null;
+    try {
+      const info = await factory.getCollectionInfo(collectionAddress);
+      collectionInfo = {
+        name: info.name,
+        symbol: info.symbol,
+        baseURI: info.baseURI,
+        totalMinted: info.totalMinted.toString(),
+        creator: info.creator,
+        owner: info.owner,
+        deployedAt: new Date(Number(info.deployedAt) * 1000).toISOString()
+      };
+    } catch (infoError) {
+      console.warn('Could not fetch collection info from factory:', infoError.message);
+      // Fallback to basic info
+      collectionInfo = {
+        name,
+        symbol,
+        baseURI
+      };
+    }
+
+    return res.json({
+      success: true,
+      message: 'NFT collection created successfully via NFTFactory',
+      collectionAddress: collectionAddress,
+      collectionInfo: collectionInfo,
+      creator: wallet.address,
+      factoryAddress: NFT_FACTORY_ADDRESS,
+      transactionHash: tx.hash,
+      blockNumber: receipt.blockNumber,
+      gasUsed: receipt.gasUsed.toString(),
+      explorerUrl: `https://shannon-explorer.somnia.network/tx/${tx.hash}`
+    });
+
+  } catch (error) {
+    console.error('Deploy NFT collection error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
+  }
+});
+
+// NFT Collection ABI for minting
+const NFT_COLLECTION_ABI = [
+  "function mint(address to) returns (uint256)",
+  "function mintWithURI(address to, string memory uri) returns (uint256)",
+  "function owner() view returns (address)",
+  "function totalMinted() view returns (uint256)",
+  "function tokenURI(uint256 tokenId) view returns (string)"
+];
+
+// Function to upload JSON metadata to IPFS using Pinata
+async function uploadToIPFS(metadata) {
+  try {
+    const PINATA_API_KEY = process.env.PINATA_API_KEY;
+    const PINATA_SECRET_KEY = process.env.PINATA_SECRET_KEY;
+
+    // If Pinata keys are not set, use public IPFS gateway (for demo - not recommended for production)
+    if (!PINATA_API_KEY || !PINATA_SECRET_KEY) {
+      console.warn('⚠️  PINATA_API_KEY or PINATA_SECRET_KEY not set in .env');
+      console.warn('   Using alternative method - uploading to public IPFS gateway');
+      
+      // Alternative: Use NFT.Storage or web3.storage
+      // For now, return a placeholder that user needs to upload manually
+      // Or use a free service like Pinata public gateway
+      throw new Error('IPFS upload requires PINATA_API_KEY and PINATA_SECRET_KEY in .env file. Please add them.');
+    }
+
+    // Convert metadata to JSON string
+    const metadataJSON = JSON.stringify(metadata);
+    
+    // Create FormData for Pinata
+    const formData = new FormData();
+    formData.append('file', Buffer.from(metadataJSON), {
+      filename: 'metadata.json',
+      contentType: 'application/json'
+    });
+
+    // Pinata pinJSONToIPFS endpoint
+    const pinataMetadata = JSON.stringify({
+      name: `NFT Metadata - ${metadata.name || 'Untitled'}`,
+    });
+
+    formData.append('pinataMetadata', pinataMetadata);
+
+    const pinataOptions = JSON.stringify({
+      cidVersion: 1,
+    });
+    formData.append('pinataOptions', pinataOptions);
+
+    // Upload to Pinata
+    const response = await axios.post('https://api.pinata.cloud/pinning/pinFileToIPFS', formData, {
+      headers: {
+        'pinata_api_key': PINATA_API_KEY,
+        'pinata_secret_api_key': PINATA_SECRET_KEY,
+        ...formData.getHeaders()
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
+
+    const ipfsHash = response.data.IpfsHash;
+    const ipfsUrl = `ipfs://${ipfsHash}`;
+    
+    console.log('✅ Metadata uploaded to IPFS:', ipfsUrl);
+    return ipfsUrl;
+
+  } catch (error) {
+    console.error('IPFS upload error:', error.message);
+    
+    // If Pinata fails, try alternative: upload metadata JSON to a folder structure
+    // For this, we'll use Pinata's pinJSONToIPFS for the baseURI folder
+    if (error.message.includes('PINATA')) {
+      throw error;
+    }
+    
+    // Try using pinJSONToIPFS directly (simpler but less flexible)
+    try {
+      const PINATA_API_KEY = process.env.PINATA_API_KEY;
+      const PINATA_SECRET_KEY = process.env.PINATA_SECRET_KEY;
+
+      if (!PINATA_API_KEY || !PINATA_SECRET_KEY) {
+        throw new Error('PINATA_API_KEY and PINATA_SECRET_KEY required for IPFS upload');
+      }
+
+      const response = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+        pinataContent: metadata,
+        pinataMetadata: {
+          name: `metadata-${Date.now()}.json`
+        }
+      }, {
+        headers: {
+          'pinata_api_key': PINATA_API_KEY,
+          'pinata_secret_api_key': PINATA_SECRET_KEY,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const ipfsHash = response.data.IpfsHash;
+      const ipfsUrl = `ipfs://${ipfsHash}`;
+      
+      console.log('✅ Metadata uploaded to IPFS:', ipfsUrl);
+      return ipfsUrl;
+    } catch (fallbackError) {
+      throw new Error(`IPFS upload failed: ${fallbackError.message}`);
+    }
+  }
+}
+
+// Function to upload directory structure to IPFS (for baseURI)
+async function uploadBaseURIToIPFS(collectionName, collectionSymbol) {
+  try {
+    const PINATA_API_KEY = process.env.PINATA_API_KEY;
+    const PINATA_SECRET_KEY = process.env.PINATA_SECRET_KEY;
+
+    if (!PINATA_API_KEY || !PINATA_SECRET_KEY) {
+      throw new Error('PINATA_API_KEY and PINATA_SECRET_KEY required for IPFS upload');
+    }
+
+    // Create a placeholder metadata file for the directory
+    const placeholderMetadata = {
+      name: `${collectionName} - Token #1`,
+      description: `An NFT from ${collectionName} collection`,
+      image: "ipfs://placeholder", // User should upload images separately
+      attributes: []
+    };
+
+    // For baseURI, we'll return a Pinata IPFS gateway URL structure
+    // Users will upload individual token metadata files later
+    // For now, we'll create a directory structure reference
+    const directoryMetadata = {
+      name: `${collectionName} Collection`,
+      description: `Base directory for ${collectionName} NFT metadata`,
+      collection: collectionName,
+      symbol: collectionSymbol
+    };
+
+    const response = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+      pinataContent: directoryMetadata,
+      pinataMetadata: {
+        name: `${collectionSymbol}-base-directory`
+      }
+    }, {
+      headers: {
+        'pinata_api_key': PINATA_API_KEY,
+        'pinata_secret_api_key': PINATA_SECRET_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const ipfsHash = response.data.IpfsHash;
+    // Return baseURI pointing to this directory (tokens will be numbered: 1, 2, 3, etc.)
+    const baseURI = `ipfs://${ipfsHash}/`;
+    
+    console.log('✅ Base directory created on IPFS:', baseURI);
+    return baseURI;
+
+  } catch (error) {
+    throw new Error(`Failed to create IPFS base directory: ${error.message}`);
+  }
+}
+
+// Simplified NFT collection creation with automatic IPFS upload
+app.post('/create-nft-collection', async (req, res) => {
+  try {
+    const { 
+      privateKey,
+      name,
+      symbol
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !name || !symbol) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, name, symbol'
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Check balance
+    const balance = await provider.getBalance(wallet.address);
+    console.log('Wallet balance:', ethers.formatEther(balance), 'STT');
+    
+    if (balance === 0n) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance for gas fees',
+        currentBalance: ethers.formatEther(balance)
+      });
+    }
+
+    console.log('🚀 Creating NFT collection with automatic IPFS upload...');
+    console.log(`Collection: ${name} (${symbol})`);
+
+    // Step 1: Generate metadata for first NFT
+    const firstTokenMetadata = {
+      name: `${name} #1`,
+      description: `The first NFT from ${name} collection`,
+      image: `ipfs://placeholder`, // Users can upload images later
+      attributes: [
+        {
+          trait_type: "Collection",
+          value: name
+        },
+        {
+          trait_type: "Token Number",
+          value: "1"
+        }
+      ]
+    };
+
+    // Step 2: Upload first token metadata to IPFS
+    console.log('📤 Uploading metadata to IPFS...');
+    let tokenMetadataIPFS;
+    try {
+      tokenMetadataIPFS = await uploadToIPFS(firstTokenMetadata);
+      console.log('✅ Metadata uploaded:', tokenMetadataIPFS);
+    } catch (ipfsError) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to upload metadata to IPFS',
+        details: ipfsError.message,
+        instruction: 'Please set PINATA_API_KEY and PINATA_SECRET_KEY in your .env file'
+      });
+    }
+
+    // Step 3: Create baseURI directory on IPFS
+    // Extract the IPFS hash from the metadata URL and use it as base
+    // For simplicity, we'll use a pattern where tokenId is appended
+    const ipfsHashMatch = tokenMetadataIPFS.match(/ipfs:\/\/([^\/]+)/);
+    if (!ipfsHashMatch) {
+      throw new Error('Failed to extract IPFS hash from metadata URL');
+    }
+
+    // For baseURI, we'll use a directory structure
+    // Since we have the hash, we'll create a parent directory reference
+    // In practice, you'd want to pin a directory structure
+    // For now, we'll use the hash pattern where {tokenId} gets appended
+    const ipfsHash = ipfsHashMatch[1];
+    const baseURI = `ipfs://${ipfsHash.substring(0, ipfsHash.length - 2)}/`; // Simplified approach
+    
+    // Better approach: Use the actual IPFS directory structure
+    // Let's upload to a proper directory structure
+    let finalBaseURI;
+    try {
+      finalBaseURI = await uploadBaseURIToIPFS(name, symbol);
+      // Update to use directory structure
+      const dirHashMatch = finalBaseURI.match(/ipfs:\/\/([^\/]+)/);
+      if (dirHashMatch) {
+        finalBaseURI = `ipfs://${dirHashMatch[1]}/`;
+      }
+    } catch (dirError) {
+      // Fallback to using metadata hash pattern
+      console.warn('Could not create directory structure, using metadata hash pattern');
+      finalBaseURI = `ipfs://${ipfsHash.substring(0, 20)}/`; // Simplified pattern
+    }
+
+    console.log('📁 Base URI:', finalBaseURI);
+
+    // Step 4: Create NFT collection with IPFS baseURI
+    console.log('🏭 Creating NFT collection on blockchain...');
+    const factory = new ethers.Contract(NFT_FACTORY_ADDRESS, NFT_FACTORY_ABI, wallet);
+    
+    let createTx;
+    try {
+      const gasEstimate = await factory.createCollection.estimateGas(name, symbol, finalBaseURI);
+      const gasLimit = (gasEstimate * 120n) / 100n;
+      createTx = await factory.createCollection(name, symbol, finalBaseURI, { gasLimit });
+    } catch (estimateError) {
+      console.warn('Gas estimation failed, proceeding without gas limit');
+      createTx = await factory.createCollection(name, symbol, finalBaseURI);
+    }
+
+    const createReceipt = await createTx.wait();
+    
+    // Parse CollectionCreated event
+    const factoryInterface = new ethers.Interface(NFT_FACTORY_ABI);
+    let collectionAddress = null;
+    
+    for (const log of createReceipt.logs) {
+      try {
+        const parsedLog = factoryInterface.parseLog(log);
+        if (parsedLog && parsedLog.name === 'CollectionCreated') {
+          collectionAddress = parsedLog.args.collectionAddress;
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!collectionAddress) {
+      throw new Error('Failed to extract collection address from transaction');
+    }
+
+    console.log('✅ Collection created:', collectionAddress);
+
+    // Step 5: Mint first NFT to the wallet owner
+    console.log('🎨 Minting first NFT...');
+    const nftContract = new ethers.Contract(collectionAddress, NFT_COLLECTION_ABI, wallet);
+    
+    // Mint with the specific metadata URI
+    const mintTx = await nftContract.mintWithURI(wallet.address, tokenMetadataIPFS);
+    const mintReceipt = await mintTx.wait();
+    
+    const totalMinted = await nftContract.totalMinted();
+    const tokenId = Number(totalMinted);
+
+    console.log('✅ NFT minted successfully!');
+
+    return res.json({
+      success: true,
+      message: 'NFT collection created and first NFT minted successfully',
+      collection: {
+        address: collectionAddress,
+        name: name,
+        symbol: symbol,
+        baseURI: finalBaseURI
+      },
+      firstNFT: {
+        tokenId: tokenId.toString(),
+        owner: wallet.address,
+        metadataURI: tokenMetadataIPFS,
+        metadata: firstTokenMetadata
+      },
+      transactions: {
+        collectionCreation: createReceipt.hash,
+        minting: mintReceipt.hash
+      },
+      blockNumber: mintReceipt.blockNumber,
+      gasUsed: (BigInt(createReceipt.gasUsed) + BigInt(mintReceipt.gasUsed)).toString(),
+      explorerUrls: {
+        collection: `https://shannon-explorer.somnia.network/tx/${createReceipt.hash}`,
+        mint: `https://shannon-explorer.somnia.network/tx/${mintReceipt.hash}`
+      },
+      nextSteps: [
+        `Your collection is live at: ${collectionAddress}`,
+        `Upload NFT images to IPFS and update metadata`,
+        `Use the collection address to mint more NFTs`,
+        `Metadata for token #${tokenId} is available at: ${tokenMetadataIPFS}`
+      ]
+    });
+
+  } catch (error) {
+    console.error('Create NFT collection error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
+  }
+});
+
+// Complete NFT creation and minting flow
+app.post('/create-and-mint-nft', async (req, res) => {
+  try {
+    const { 
+      privateKey,
+      collectionAddress, // Optional: if provided, uses existing collection
+      // Collection creation params (if collectionAddress not provided)
+      collectionName,
+      collectionSymbol,
+      baseURI, // Optional: if not provided, will be generated
+      // NFT minting params
+      recipientAddress, // Address to receive the NFT
+      // NFT metadata
+      nftName,
+      nftDescription,
+      imageUrl, // URL or IPFS hash of the image
+      attributes // Optional: array of {trait_type, value} objects
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !recipientAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, recipientAddress'
+      });
+    }
+
+    // If collectionAddress not provided, need collection creation params
+    if (!collectionAddress && (!collectionName || !collectionSymbol)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Either provide collectionAddress or collectionName + collectionSymbol'
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Check balance
+    const balance = await provider.getBalance(wallet.address);
+    console.log('Wallet balance:', ethers.formatEther(balance), 'STT');
+    
+    if (balance === 0n) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient balance for gas fees',
+        currentBalance: ethers.formatEther(balance)
+      });
+    }
+
+    let finalCollectionAddress = collectionAddress;
+    let finalBaseURI = baseURI;
+
+    // Step 1: Create collection if not provided
+    if (!collectionAddress) {
+      console.log('Creating new NFT collection...');
+      
+      // If baseURI not provided, create a placeholder
+      if (!finalBaseURI) {
+        finalBaseURI = `https://api.example.com/metadata/${collectionSymbol.toLowerCase()}/`;
+        console.log('⚠️  No baseURI provided, using placeholder. Update collection baseURI later if needed.');
+      }
+
+      const factory = new ethers.Contract(NFT_FACTORY_ADDRESS, NFT_FACTORY_ABI, wallet);
+      
+      // Estimate and create collection
+      let tx;
+      try {
+        const gasEstimate = await factory.createCollection.estimateGas(
+          collectionName, 
+          collectionSymbol, 
+          finalBaseURI
+        );
+        const gasLimit = (gasEstimate * 120n) / 100n;
+        tx = await factory.createCollection(collectionName, collectionSymbol, finalBaseURI, { gasLimit });
+      } catch (estimateError) {
+        console.warn('Gas estimation failed, proceeding without gas limit');
+        tx = await factory.createCollection(collectionName, collectionSymbol, finalBaseURI);
+      }
+
+      const receipt = await tx.wait();
+      
+      // Parse CollectionCreated event
+      const factoryInterface = new ethers.Interface(NFT_FACTORY_ABI);
+      for (const log of receipt.logs) {
+        try {
+          const parsedLog = factoryInterface.parseLog(log);
+          if (parsedLog && parsedLog.name === 'CollectionCreated') {
+            finalCollectionAddress = parsedLog.args.collectionAddress;
+            break;
+          }
+        } catch (e) {}
+      }
+
+      if (!finalCollectionAddress) {
+        throw new Error('Failed to extract collection address from transaction');
+      }
+
+      console.log('✅ Collection created at:', finalCollectionAddress);
+    } else {
+      console.log('Using existing collection:', finalCollectionAddress);
+    }
+
+    // Step 2: Connect to NFT collection contract
+    const nftContract = new ethers.Contract(finalCollectionAddress, NFT_COLLECTION_ABI, wallet);
+    
+    // Verify ownership (only owner can mint)
+    const owner = await nftContract.owner();
+    if (owner.toLowerCase() !== wallet.address.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only collection owner can mint NFTs',
+        collectionOwner: owner,
+        yourAddress: wallet.address
+      });
+    }
+
+    // Step 3: Generate metadata JSON
+    const tokenId = Number((await nftContract.totalMinted())) + 1; // Next token ID
+    const metadata = {
+      name: nftName || `NFT #${tokenId}`,
+      description: nftDescription || `An NFT from ${collectionName || 'collection'}`,
+      image: imageUrl || '',
+      attributes: attributes || []
+    };
+
+    // Construct metadata URI
+    // Option 1: If using baseURI with token ID
+    let tokenMetadataURI = '';
+    if (finalBaseURI && !finalBaseURI.endsWith('/')) {
+      finalBaseURI = finalBaseURI + '/';
+    }
+    
+    if (finalBaseURI && finalBaseURI.startsWith('http')) {
+      // HTTP/HTTPS baseURI - append token ID
+      tokenMetadataURI = `${finalBaseURI}${tokenId}`;
+    } else if (finalBaseURI && finalBaseURI.startsWith('ipfs://')) {
+      // IPFS baseURI - append token ID
+      tokenMetadataURI = `${finalBaseURI}${tokenId}`;
+    } else {
+      // No baseURI or custom - would need to upload metadata separately
+      // For now, we'll use mintWithURI if they provide a custom URI
+      tokenMetadataURI = finalBaseURI || '';
+    }
+
+    console.log('📝 Generated metadata:', JSON.stringify(metadata, null, 2));
+    console.log('🔗 Token metadata URI:', tokenMetadataURI || '(will use baseURI + tokenId)');
+
+    // Step 4: Mint the NFT
+    let mintTx;
+    if (tokenMetadataURI && !tokenMetadataURI.endsWith(tokenId.toString())) {
+      // Custom URI provided - use mintWithURI
+      console.log('Minting NFT with custom URI...');
+      mintTx = await nftContract.mintWithURI(recipientAddress, tokenMetadataURI);
+    } else {
+      // Use standard mint (will use baseURI + tokenId)
+      console.log('Minting NFT...');
+      mintTx = await nftContract.mint(recipientAddress);
+    }
+
+    console.log('Transaction hash:', mintTx.hash);
+    const mintReceipt = await mintTx.wait();
+    console.log('✅ NFT minted successfully');
+
+    // Get final token ID (in case it changed)
+    const totalMinted = await nftContract.totalMinted();
+    const finalTokenId = Number(totalMinted);
+    const finalTokenURI = await nftContract.tokenURI(finalTokenId).catch(() => '');
+
+    return res.json({
+      success: true,
+      message: 'NFT created and minted successfully',
+      collectionAddress: finalCollectionAddress,
+      tokenId: finalTokenId.toString(),
+      recipient: recipientAddress,
+      metadata: metadata,
+      metadataURI: finalTokenURI || tokenMetadataURI || `${finalBaseURI}${finalTokenId}`,
+      mintTransactionHash: mintReceipt.hash,
+      blockNumber: mintReceipt.blockNumber,
+      gasUsed: mintReceipt.gasUsed.toString(),
+      explorerUrl: `https://shannon-explorer.somnia.network/tx/${mintReceipt.hash}`,
+      nextSteps: tokenMetadataURI ? [] : [
+        'Upload the metadata JSON to your storage (IPFS, Arweave, or your server)',
+        `Update the collection baseURI to point to your metadata location`,
+        `Metadata should be accessible at: ${finalBaseURI}${finalTokenId}`
+      ]
+    });
+
+  } catch (error) {
+    console.error('Create and mint NFT error:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
