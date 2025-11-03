@@ -14,8 +14,8 @@ export default function Home() {
           </p>
         </div>
         <Button asChild size="lg" className="text-lg px-8 py-6">
-          <Link href="/agent-builder">
-            Go to Agent Builder
+          <Link href="/my-agents">
+            View My Agents
           </Link>
         </Button>
       </div>
