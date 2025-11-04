@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth"
 import { getAgentsByUserId, deleteAgent } from "@/lib/agents"
 import type { Agent } from "@/lib/supabase"
 import { AgentWallet } from "@/components/agent-wallet"
+import { toast } from "@/components/ui/use-toast"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +42,8 @@ export default function MyAgents() {
   const [loading, setLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [agentToDelete, setAgentToDelete] = useState<string | null>(null)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [selectedAgentForExport, setSelectedAgentForExport] = useState<Agent | null>(null)
 
   useEffect(() => {
     if (ready && !authenticated) {
@@ -206,8 +216,8 @@ export default function MyAgents() {
                     className="flex-1"
                     onClick={(e) => {
                       e.stopPropagation()
-                      // Export Agent logic will be added later
-                      console.log(`Export agent: ${agent.id}`)
+                      setSelectedAgentForExport(agent)
+                      setExportDialogOpen(true)
                     }}
                   >
                     <Download className="h-4 w-4 mr-2" />
@@ -250,6 +260,151 @@ export default function MyAgents() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Export Agent: {selectedAgentForExport?.name}</DialogTitle>
+            <DialogDescription>
+              Use this agent in your code with the API key below
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* API Key */}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">API Key</label>
+              <div className="p-3 bg-muted rounded-md border">
+                <code className="text-sm font-mono break-all">{selectedAgentForExport?.api_key}</code>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">How to Use</label>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Make a POST request to <code className="bg-muted px-1 py-0.5 rounded">/api/agent/chat</code> with the following body:
+                </p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><code className="bg-muted px-1 py-0.5 rounded">api_key</code>: Your agent's API key (shown above)</li>
+                  <li><code className="bg-muted px-1 py-0.5 rounded">user_message</code>: The message you want to send to the agent</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* cURL Example */}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">cURL Example</label>
+              <div className="relative">
+                <pre className="p-4 bg-muted rounded-md border overflow-x-auto text-xs">
+                  <code>{`curl -X POST ${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/agent/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "api_key": "${selectedAgentForExport?.api_key || 'YOUR_API_KEY'}",
+    "user_message": "your_message_here"
+  }'`}</code>
+                </pre>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="absolute top-2 right-2"
+                  onClick={() => {
+                    const curlCommand = `curl -X POST ${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/agent/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "api_key": "${selectedAgentForExport?.api_key || 'YOUR_API_KEY'}",
+    "user_message": "your_message_here"
+  }'`
+                    navigator.clipboard.writeText(curlCommand)
+                    toast({
+                      title: "Copied",
+                      description: "cURL command copied to clipboard",
+                    })
+                  }}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Copy
+                </Button>
+              </div>
+            </div>
+
+            {/* JavaScript Example */}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">JavaScript Example</label>
+              <div className="relative">
+                <pre className="p-4 bg-muted rounded-md border overflow-x-auto text-xs">
+                  <code>{`const response = await fetch('${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/agent/chat', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    api_key: '${selectedAgentForExport?.api_key || 'YOUR_API_KEY'}',
+    user_message: 'your_message_here'
+  })
+});
+
+const data = await response.json();
+console.log(data);`}</code>
+                </pre>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="absolute top-2 right-2"
+                  onClick={() => {
+                    const jsCode = `const response = await fetch('${typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/agent/chat', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    api_key: '${selectedAgentForExport?.api_key || 'YOUR_API_KEY'}',
+    user_message: 'your_message_here'
+  })
+});
+
+const data = await response.json();
+console.log(data);`
+                    navigator.clipboard.writeText(jsCode)
+                    toast({
+                      title: "Copied",
+                      description: "JavaScript code copied to clipboard",
+                    })
+                  }}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Copy
+                </Button>
+              </div>
+            </div>
+
+            {/* Response Format */}
+            <div className="space-y-2">
+              <label className="text-sm font-semibold">Response Format</label>
+              <div className="p-3 bg-muted rounded-md border">
+                <pre className="text-xs overflow-x-auto">
+                  <code>{`{
+  "agent_response": "The agent's response text...",
+  "tool_calls": [
+    {
+      "tool": "tool_name",
+      "parameters": { ... }
+    }
+  ],
+  "results": [
+    {
+      "success": true,
+      "tool": "tool_name",
+      "result": { ... }
+    }
+  ]
+}`}</code>
+                </pre>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

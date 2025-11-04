@@ -384,14 +384,8 @@ export default function AgentChatPage() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary" />
             <h1 className="text-xl font-semibold">{agent.name}</h1>
           </div>
-          {agent.description && (
-            <p className="text-sm text-muted-foreground hidden sm:block">
-              {agent.description}
-            </p>
-          )}
         </div>
       </div>
 
@@ -499,14 +493,14 @@ export default function AgentChatPage() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type your message..."
-            className="min-h-[60px] max-h-[120px] resize-none"
+            className="min-h-[60px] max-h-[120px] resize-none rounded-2xl"
             disabled={isLoading || !agent || !agent.api_key}
           />
           <Button
             onClick={handleSend}
             disabled={!input.trim() || isLoading || !agent || !agent.api_key}
             size="icon"
-            className="h-[60px] w-[60px] shrink-0"
+            className="h-[60px] w-[60px] shrink-0 rounded-full"
           >
             {isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
