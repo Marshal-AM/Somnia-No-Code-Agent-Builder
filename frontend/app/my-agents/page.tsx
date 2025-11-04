@@ -10,7 +10,6 @@ import { useAuth } from "@/lib/auth"
 import { getAgentsByUserId, deleteAgent } from "@/lib/agents"
 import type { Agent } from "@/lib/supabase"
 import { AgentWallet } from "@/components/agent-wallet"
-import { AgentChatModal } from "@/components/agent-chat-modal"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,8 +34,6 @@ export default function MyAgents() {
   const [loading, setLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [agentToDelete, setAgentToDelete] = useState<string | null>(null)
-  const [chatModalOpen, setChatModalOpen] = useState(false)
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
 
   useEffect(() => {
     if (ready && !authenticated) {
@@ -198,8 +195,7 @@ export default function MyAgents() {
                           className="flex-1"
                           onClick={(e) => {
                             e.stopPropagation()
-                            setSelectedAgent(agent)
-                            setChatModalOpen(true)
+                            router.push(`/agent/${agent.id}/chat`)
                           }}
                         >
                           <MessageCircle className="h-4 w-4 mr-2" />
@@ -254,12 +250,6 @@ export default function MyAgents() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <AgentChatModal
-        open={chatModalOpen}
-        onOpenChange={setChatModalOpen}
-        agent={selectedAgent}
-      />
     </main>
   )
 }
