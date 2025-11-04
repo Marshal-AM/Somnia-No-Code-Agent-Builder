@@ -1,10 +1,42 @@
+"use client"
+
+import { useRouter, useSearchParams } from "next/navigation"
+import { useEffect } from "react"
 import WorkflowBuilder from "@/components/workflow-builder"
+import { useAuth } from "@/lib/auth"
+import { Loader2 } from "lucide-react"
 
 export default function AgentBuilder() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const agentId = searchParams.get("agent")
+  const { ready, authenticated, loading } = useAuth()
+
+  useEffect(() => {
+    if (ready && !authenticated) {
+      router.replace("/")
+    }
+  }, [ready, authenticated, router])
+
+  if (!ready || loading) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+          <p className="mt-4 text-muted-foreground">Loading...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (!authenticated) {
+    return null // Will redirect
+  }
+
   return (
     <main className="flex min-h-screen flex-col">
       <div className="flex-1">
-        <WorkflowBuilder />
+        <WorkflowBuilder agentId={agentId || undefined} />
       </div>
     </main>
   )

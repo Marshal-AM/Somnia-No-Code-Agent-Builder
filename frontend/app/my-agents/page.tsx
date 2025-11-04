@@ -1,85 +1,126 @@
 "use client"
 
+import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
-import { Bot, MessageCircle, Calendar, Plus } from "lucide-react"
-
-// Mock data for agents
-const mockAgents = [
-  {
-    id: "1",
-    name: "Customer Support Bot",
-    description: "Handles customer inquiries and support tickets automatically",
-    lastModified: "2024-01-15",
-    messageCount: 42,
-  },
-  {
-    id: "2",
-    name: "Data Processing Agent",
-    description: "Processes and transforms data between different formats",
-    lastModified: "2024-01-14",
-    messageCount: 28,
-  },
-  {
-    id: "3",
-    name: "Email Automation",
-    description: "Sends automated emails based on workflow triggers",
-    lastModified: "2024-01-13",
-    messageCount: 15,
-  },
-  {
-    id: "4",
-    name: "Content Generator",
-    description: "Generates content based on user inputs and templates",
-    lastModified: "2024-01-12",
-    messageCount: 67,
-  },
-  {
-    id: "5",
-    name: "Analytics Dashboard",
-    description: "Collects and analyzes data from multiple sources",
-    lastModified: "2024-01-11",
-    messageCount: 33,
-  },
-  {
-    id: "6",
-    name: "Task Scheduler",
-    description: "Manages and schedules recurring tasks and reminders",
-    lastModified: "2024-01-10",
-    messageCount: 19,
-  },
-]
+import { Bot, MessageCircle, Calendar, Plus, LogOut, Loader2 } from "lucide-react"
+import { useAuth } from "@/lib/auth"
+import { getAgentsByUserId, deleteAgent, type Agent } from "@/lib/agents"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 export default function MyAgents() {
+  const router = useRouter()
+  const { ready, authenticated, user, logout, loading: authLoading } = useAuth()
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [agentToDelete, setAgentToDelete] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (ready && !authenticated) {
+      router.replace("/")
+    }
+  }, [ready, authenticated, router])
+
+  useEffect(() => {
+    if (ready && authenticated && user?.id) {
+      fetchAgents()
+    }
+  }, [ready, authenticated, user])
+
+  const fetchAgents = async () => {
+    if (!user?.id) return
+    setLoading(true)
+    try {
+      const userAgents = await getAgentsByUserId(user.id)
+      setAgents(userAgents)
+    } catch (error) {
+      console.error("Error fetching agents:", error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteAgent = async (agentId: string) => {
+    setAgentToDelete(agentId)
+    setDeleteDialogOpen(true)
+  }
+
+  const confirmDelete = async () => {
+    if (!agentToDelete) return
+    try {
+      await deleteAgent(agentToDelete)
+      setAgents(agents.filter((agent) => agent.id !== agentToDelete))
+      setDeleteDialogOpen(false)
+      setAgentToDelete(null)
+    } catch (error) {
+      console.error("Error deleting agent:", error)
+    }
+  }
+
   const handleAgentClick = (agentId: string) => {
-    // Placeholder for chat functionality
-    console.log(`Opening chat with agent: ${agentId}`)
+    router.push(`/agent-builder?agent=${agentId}`)
+  }
+
+  if (!ready || authLoading) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+          <p className="mt-4 text-muted-foreground">Loading...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (!authenticated) {
+    return null // Will redirect
   }
 
   return (
     <main className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">My Agents</h1>
             <p className="text-muted-foreground mt-2">
               Manage and interact with your Somnia agents
             </p>
           </div>
-          <Button asChild size="lg" className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg font-semibold">
-            <Link href="/agent-builder">
-              <Plus className="h-5 w-5 mr-2" />
-              Create a New Somnia Agent
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild size="lg" className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg font-semibold">
+              <Link href="/agent-builder">
+                <Plus className="h-5 w-5 mr-2" />
+                Create New Agent
+              </Link>
+            </Button>
+            <Button onClick={logout} variant="outline" size="lg">
+              <LogOut className="h-5 w-5 mr-2" />
+              Logout
+            </Button>
+          </div>
         </div>
 
         {/* Agents Grid */}
-        {mockAgents.length > 0 ? (
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : agents.length > 0 ? (
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {mockAgents.map((agent) => (
+            {agents.map((agent) => (
               <Card
                 key={agent.id}
                 className="cursor-pointer transition-all hover:shadow-md hover:border-primary/50"
@@ -97,32 +138,42 @@ export default function MyAgents() {
                     </div>
                   </div>
                   <CardDescription className="mt-2">
-                    {agent.description}
+                    {agent.description || "No description"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1.5">
-                      <MessageCircle className="h-4 w-4" />
-                      <span>{agent.messageCount} messages</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
                       <Calendar className="h-4 w-4" />
-                      <span>{new Date(agent.lastModified).toLocaleDateString()}</span>
+                      <span>Created {new Date(agent.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground font-mono bg-gray-100 p-2 rounded">
+                      API Key: {agent.api_key.substring(0, 8)}...
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {agent.tools.length} tool(s) configured
                     </div>
                   </div>
                 </CardContent>
-                <CardFooter className="border-t pt-4">
+                <CardFooter className="border-t pt-4 flex gap-2">
                   <Button
-                    variant="ghost"
-                    className="w-full justify-center"
+                    variant="default"
+                    className="flex-1"
                     onClick={(e) => {
                       e.stopPropagation()
                       handleAgentClick(agent.id)
                     }}
                   >
-                    <MessageCircle className="h-4 w-4 mr-2" />
-                    Chat with Agent
+                    Edit
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteAgent(agent.id)
+                    }}
+                  >
+                    Delete
                   </Button>
                 </CardFooter>
               </Card>
@@ -144,6 +195,23 @@ export default function MyAgents() {
           </div>
         )}
       </div>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Agent?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this agent? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   )
 }

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import ReactFlow, {
   ReactFlowProvider,
@@ -22,7 +22,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css"
 import { toast } from "@/components/ui/use-toast"
 import { Button } from "@/components/ui/button"
-import { Save, Upload, Play, ArrowLeft } from "lucide-react"
+import { Save, Play, ArrowLeft } from "lucide-react"
 import NodeLibrary from "./node-library"
 import NodeConfigPanel from "./node-config-panel"
 import CustomEdge from "./custom-edge"
@@ -30,6 +30,9 @@ import { ToolNode } from "./nodes/tool-node"
 import { generateNodeId, createNode } from "@/lib/workflow-utils"
 import type { WorkflowNode } from "@/lib/types"
 import { AIChatModal } from "./ai-chat-modal"
+import { useAuth } from "@/lib/auth"
+import { createAgent, getAgentById, updateAgent } from "@/lib/agents"
+import { workflowToTools } from "@/lib/workflow-converter"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -71,8 +74,13 @@ const edgeTypes: EdgeTypes = {
   custom: CustomEdge,
 }
 
-export default function WorkflowBuilder() {
+interface WorkflowBuilderProps {
+  agentId?: string
+}
+
+export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
   const router = useRouter()
+  const { user, authenticated } = useAuth()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -80,6 +88,9 @@ export default function WorkflowBuilder() {
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null)
   const [isAIChatOpen, setIsAIChatOpen] = useState(false)
   const [showExitDialog, setShowExitDialog] = useState(false)
+  const [agentName, setAgentName] = useState("")
+  const [agentDescription, setAgentDescription] = useState("")
+  const [loadingAgent, setLoadingAgent] = useState(false)
 
   const onConnect = useCallback(
     (params: Edge | Connection) => setEdges((eds) => addEdge({ ...params, type: "custom" }, eds)),
@@ -149,7 +160,7 @@ export default function WorkflowBuilder() {
     [setNodes],
   )
 
-  const saveWorkflow = () => {
+  const saveWorkflow = async () => {
     if (nodes.length === 0) {
       toast({
         title: "Nothing to save",
@@ -159,48 +170,58 @@ export default function WorkflowBuilder() {
       return
     }
 
-    const workflow = {
-      nodes,
-      edges,
+    if (!authenticated || !user?.id) {
+      toast({
+        title: "Not authenticated",
+        description: "Please log in to save your workflow",
+        variant: "destructive",
+      })
+      return
     }
 
-    const workflowString = JSON.stringify(workflow)
-    localStorage.setItem("workflow", workflowString)
-
-    toast({
-      title: "Workflow saved",
-      description: "Your workflow has been saved successfully",
-    })
-  }
-
-  const loadWorkflow = () => {
-    const savedWorkflow = localStorage.getItem("workflow")
-
-    if (!savedWorkflow) {
+    if (!agentName.trim()) {
       toast({
-        title: "No saved workflow",
-        description: "There is no workflow saved in your browser",
+        title: "Agent name required",
+        description: "Please enter a name for your agent",
         variant: "destructive",
       })
       return
     }
 
     try {
-      const { nodes: savedNodes, edges: savedEdges } = JSON.parse(savedWorkflow)
-      setNodes(savedNodes)
-      setEdges(savedEdges)
+      const tools = workflowToTools(nodes, edges)
+
+      if (agentId) {
+        // Update existing agent
+        await updateAgent(agentId, {
+          name: agentName,
+          description: agentDescription || null,
+          tools,
+        })
+        toast({
+          title: "Agent updated",
+          description: "Your agent has been updated successfully",
+        })
+      } else {
+        // Create new agent
+        const agent = await createAgent(user.id, agentName, agentDescription || null, tools)
+        toast({
+          title: "Agent created",
+          description: "Your agent has been created successfully",
+        })
+        // Redirect to my-agents or stay on builder with the agent ID
+        router.push(`/agent-builder?agent=${agent.id}`)
+      }
+    } catch (error: any) {
+      console.error("Error saving agent:", error)
       toast({
-        title: "Workflow loaded",
-        description: "Your workflow has been loaded successfully",
-      })
-    } catch (error) {
-      toast({
-        title: "Error loading workflow",
-        description: "There was an error loading your workflow",
+        title: "Error saving agent",
+        description: error.message || "Failed to save agent",
         variant: "destructive",
       })
     }
   }
+
 
   const executeWorkflow = () => {
     if (nodes.length === 0) {
@@ -239,6 +260,51 @@ export default function WorkflowBuilder() {
   const handleConfirmExit = () => {
     setShowExitDialog(false)
     router.push("/my-agents")
+  }
+
+  // Load agent if agentId is provided
+  useEffect(() => {
+    if (agentId && authenticated && user?.id) {
+      loadAgent()
+    }
+  }, [agentId, authenticated, user])
+
+  const loadAgent = async () => {
+    if (!agentId) return
+    setLoadingAgent(true)
+    try {
+      const agent = await getAgentById(agentId)
+      if (agent) {
+        // Verify ownership
+        if (agent.user_id !== user?.id) {
+          toast({
+            title: "Access denied",
+            description: "You don't have permission to access this agent",
+            variant: "destructive",
+          })
+          router.push("/my-agents")
+          return
+        }
+
+        setAgentName(agent.name)
+        setAgentDescription(agent.description || "")
+        // Convert tools back to workflow format
+        // Note: This is a simplified version - you may want to enhance toolsToWorkflow
+        // For now, we'll just show the tools that exist
+        const tools = agent.tools || []
+        // You can enhance this to properly reconstruct the workflow
+        // For now, we'll keep the current workflow and just show the agent info
+      }
+    } catch (error) {
+      console.error("Error loading agent:", error)
+      toast({
+        title: "Error loading agent",
+        description: "Failed to load agent data",
+        variant: "destructive",
+      })
+    } finally {
+      setLoadingAgent(false)
+    }
   }
 
   return (
@@ -294,18 +360,32 @@ export default function WorkflowBuilder() {
               </Panel>
               <Panel position="top-right">
                 <div className="flex gap-2">
-                  <Button onClick={saveWorkflow} size="sm" variant="outline">
+                  <Button onClick={saveWorkflow} size="sm" variant="outline" disabled={loadingAgent}>
                     <Save className="h-4 w-4 mr-2" />
-                    Save
-                  </Button>
-                  <Button onClick={loadWorkflow} size="sm" variant="outline">
-                    <Upload className="h-4 w-4 mr-2" />
-                    Load
+                    {agentId ? "Update Agent" : "Save Agent"}
                   </Button>
                   <Button onClick={executeWorkflow} size="sm" variant="default">
                     <Play className="h-4 w-4 mr-2" />
                     Execute
                   </Button>
+                </div>
+              </Panel>
+              <Panel position="top-center">
+                <div className="flex gap-2 items-center bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-md">
+                  <input
+                    type="text"
+                    placeholder="Agent Name"
+                    value={agentName}
+                    onChange={(e) => setAgentName(e.target.value)}
+                    className="px-3 py-1.5 border rounded-md text-sm min-w-[200px]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Description (optional)"
+                    value={agentDescription}
+                    onChange={(e) => setAgentDescription(e.target.value)}
+                    className="px-3 py-1.5 border rounded-md text-sm min-w-[250px]"
+                  />
                 </div>
               </Panel>
             </ReactFlow>
