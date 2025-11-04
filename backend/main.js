@@ -4,6 +4,7 @@ const solc = require('solc');
 const axios = require('axios');
 const FormData = require('form-data');
 const OpenAI = require('openai');
+const YieldCalculatorTool = require('./yieldCalculator');
 require('dotenv').config();
 
 const app = express();
@@ -482,6 +483,61 @@ app.post('/deploy-token', async (req, res) => {
 
     console.log('Token created at address:', newTokenAddress);
 
+    // IMPORTANT: The tokens are minted to the factory contract, not the creator
+    // We need to check the factory's balance and transfer tokens to the creator
+    const TOKEN_ABI = [
+      'function transfer(address to, uint256 amount) returns (bool)',
+      'function balanceOf(address account) view returns (uint256)',
+      'function decimals() view returns (uint8)',
+      'function symbol() view returns (string)',
+      'function owner() view returns (address)',
+      'function mint(address to, uint256 amount) returns ()'
+    ];
+    
+    const tokenContract = new ethers.Contract(newTokenAddress, TOKEN_ABI, wallet);
+    
+    // Check factory's token balance
+    const factoryBalance = await tokenContract.balanceOf(FACTORY_ADDRESS);
+    const tokenDecimals = await tokenContract.decimals().catch(() => 18);
+    const expectedSupply = BigInt(initialSupply.toString()) * (10n ** BigInt(tokenDecimals));
+    
+    console.log(`Factory token balance: ${ethers.formatUnits(factoryBalance, tokenDecimals)}`);
+    console.log(`Expected supply: ${ethers.formatUnits(expectedSupply, tokenDecimals)}`);
+    
+    // Try to transfer tokens from factory to creator
+    // Since the factory owns the tokens initially, we need to use the owner's mint function
+    // OR if the factory has a way to transfer, we'd use that
+    // For now, check if creator is owner and can mint (though this increases supply)
+    let transferSuccess = false;
+    let transferTxHash = null;
+    
+    try {
+      const tokenOwner = await tokenContract.owner();
+      console.log(`Token owner: ${tokenOwner}`);
+      console.log(`Creator wallet: ${wallet.address}`);
+      
+      if (tokenOwner.toLowerCase() === wallet.address.toLowerCase()) {
+        // Creator is the owner - we can mint new tokens to the creator
+        // But this increases total supply, so we'll check if factory has tokens first
+        if (factoryBalance > 0n) {
+          console.log('⚠️  Tokens are in factory contract. Attempting to use mint function...');
+          // Note: Minting will increase total supply, but it's the only way without modifying factory
+          // Actually, we can't transfer from factory without factory's approval
+          // So we'll mint equivalent tokens to creator
+          const mintTx = await tokenContract.mint(wallet.address, initialSupplyBigInt);
+          const mintReceipt = await mintTx.wait();
+          transferSuccess = true;
+          transferTxHash = mintReceipt.hash;
+          console.log(`✅ Minted ${initialSupply} tokens to creator: ${mintReceipt.hash}`);
+        }
+      } else {
+        console.log('⚠️  Creator is not the token owner. Cannot mint tokens.');
+      }
+    } catch (transferError) {
+      console.warn('Could not transfer/mint tokens to creator:', transferError.message);
+      // Continue anyway - user can manually transfer later if needed
+    }
+
     // Optionally get token info from factory
     let tokenInfo = null;
     try {
@@ -504,6 +560,9 @@ app.post('/deploy-token', async (req, res) => {
         initialSupply: initialSupply.toString()
       };
     }
+    
+    // Check creator's final balance
+    const creatorBalance = await tokenContract.balanceOf(wallet.address);
 
     return res.json({
       success: true,
@@ -515,7 +574,35 @@ app.post('/deploy-token', async (req, res) => {
       transactionHash: tx.hash,
       blockNumber: receipt.blockNumber,
       gasUsed: receipt.gasUsed.toString(),
-      explorerUrl: `https://shannon-explorer.somnia.network/tx/${tx.hash}`
+      explorerUrl: `https://shannon-explorer.somnia.network/tx/${tx.hash}`,
+      tokenTransfer: {
+        success: transferSuccess,
+        method: transferSuccess ? 'minted' : 'none',
+        transactionHash: transferTxHash,
+        note: transferSuccess 
+          ? `Tokens minted to your wallet. Note: This increases total supply.` 
+          : `Initial tokens are in factory contract. You may need to mint tokens using the owner's mint function.`
+      },
+      balances: {
+        factory: ethers.formatUnits(factoryBalance, tokenDecimals),
+        creator: ethers.formatUnits(creatorBalance, tokenDecimals),
+        expected: initialSupply.toString()
+      },
+      note: transferSuccess 
+        ? `${initialSupply} tokens have been minted to your wallet address.`
+        : `⚠️  Initial tokens (${initialSupply}) are in the factory contract. You are the token owner and can mint tokens using the mint function.`,
+      nextSteps: transferSuccess ? [
+        `✅ ${initialSupply} tokens are now in your wallet: ${wallet.address}`,
+        `To transfer tokens to someone, use the /transfer endpoint with:`,
+        `  - privateKey: Your wallet private key`,
+        `  - toAddress: Recipient's wallet address`,
+        `  - amount: Amount of tokens to send (as a number, e.g., "100")`,
+        `  - tokenAddress: ${newTokenAddress}`
+      ] : [
+        `⚠️  Note: Initial tokens are in the factory contract (${FACTORY_ADDRESS})`,
+        `You are the token owner and can mint tokens using the token contract's mint function.`,
+        `To transfer tokens to someone, first ensure you have tokens in your wallet, then use the /transfer endpoint.`
+      ]
     });
 
   } catch (error) {
@@ -2114,6 +2201,166 @@ app.post('/api/balance/erc20', async (req, res) => {
         error: error.message || 'Error fetching ERC-20 balances'
       });
     }
+  }
+});
+
+// Yield Calculator endpoint - Create deposit and get yield projections
+app.post('/yield', async (req, res) => {
+  try {
+    const { 
+      privateKey, 
+      tokenAddress, 
+      depositAmount, 
+      apyPercent 
+    } = req.body;
+
+    // Validation
+    if (!privateKey || !tokenAddress || !depositAmount || !apyPercent) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: privateKey, tokenAddress, depositAmount, apyPercent'
+      });
+    }
+
+    // Validate token address
+    if (!ethers.isAddress(tokenAddress)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid token address format'
+      });
+    }
+
+    // Validate APY (should be between 0 and 100)
+    const apy = parseFloat(apyPercent);
+    if (isNaN(apy) || apy <= 0 || apy > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'APY must be a number between 0 and 100'
+      });
+    }
+
+    // Validate deposit amount
+    const amount = parseFloat(depositAmount);
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Deposit amount must be a positive number'
+      });
+    }
+
+    // Get YieldCalculator contract address from environment
+    const yieldCalculatorAddress = process.env.YIELD_CALCULATOR_ADDRESS;
+    if (!yieldCalculatorAddress) {
+      return res.status(500).json({
+        success: false,
+        error: 'YIELD_CALCULATOR_ADDRESS not configured in environment'
+      });
+    }
+
+    const provider = new ethers.JsonRpcProvider(SOMNIA_TESTNET_RPC);
+    const wallet = new ethers.Wallet(privateKey, provider);
+
+    // Initialize YieldCalculatorTool
+    const tool = new YieldCalculatorTool(yieldCalculatorAddress, privateKey);
+
+    // Step 1: Check token balance
+    const { token, decimals } = await tool.initializeToken(tokenAddress);
+    const tokenBalance = await token.balanceOf(wallet.address);
+    const tokenSymbol = await token.symbol().catch(() => 'TOKEN');
+    const tokenName = await token.name().catch(() => 'Token');
+
+    const requiredAmount = tool.parseToken(depositAmount, decimals);
+    
+    if (tokenBalance < requiredAmount) {
+      const balanceFormatted = tool.formatToken(tokenBalance, decimals);
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient token balance',
+        tokenAddress: tokenAddress,
+        tokenSymbol: tokenSymbol,
+        currentBalance: balanceFormatted,
+        requiredAmount: depositAmount
+      });
+    }
+
+    // Step 2: Check and approve tokens if needed
+    const allowance = await token.allowance(wallet.address, yieldCalculatorAddress);
+    let approvalTxHash = null;
+
+    if (allowance < requiredAmount) {
+      console.log(`Approving tokens for YieldCalculator...`);
+      const approveTx = await token.approve(yieldCalculatorAddress, ethers.MaxUint256);
+      const approveReceipt = await approveTx.wait();
+      approvalTxHash = approveReceipt.hash;
+      console.log(`✅ Approval confirmed: ${approvalTxHash}`);
+    }
+
+    // Step 3: Create deposit
+    const depositId = await tool.createDeposit(tokenAddress, depositAmount, apyPercent);
+
+    // Step 4: Get current yield info
+    const yieldInfo = await tool.getCurrentYield(parseInt(depositId));
+
+    // Step 5: Calculate yield projections for specified periods
+    const projectionPeriods = [7, 30, 60, 90, 180, 365]; // days
+    const projections = [];
+
+    for (const days of projectionPeriods) {
+      const yieldAmount = await tool.calculateYield(parseInt(depositId), days);
+      const yieldAmountNum = parseFloat(yieldAmount);
+      const principalNum = parseFloat(yieldInfo.principal);
+      const totalValue = (principalNum + yieldAmountNum).toFixed(6);
+
+      projections.push({
+        days: days,
+        yieldAmount: yieldAmount,
+        principal: yieldInfo.principal,
+        totalValue: totalValue,
+        tokenSymbol: yieldInfo.tokenSymbol
+      });
+    }
+
+    // Get deposit transaction hash (from createDeposit)
+    // Note: createDeposit returns depositId, but we can get tx info if needed
+    // For now, we'll return the deposit info
+
+    return res.json({
+      success: true,
+      message: 'Deposit created successfully',
+      deposit: {
+        depositId: depositId,
+        tokenAddress: tokenAddress,
+        tokenName: tokenName,
+        tokenSymbol: tokenSymbol,
+        depositAmount: depositAmount,
+        apyPercent: apyPercent,
+        principal: yieldInfo.principal,
+        currentYield: yieldInfo.yieldAmount,
+        totalAmount: yieldInfo.totalAmount,
+        daysPassed: yieldInfo.daysPassed,
+        active: yieldInfo.active
+      },
+      projections: projections,
+      wallet: wallet.address,
+      approvalTransaction: approvalTxHash ? {
+        hash: approvalTxHash,
+        explorerUrl: `https://shannon-explorer.somnia.network/tx/${approvalTxHash}`
+      } : null,
+      yieldCalculatorAddress: yieldCalculatorAddress,
+      nextSteps: [
+        `Your deposit is earning ${apyPercent}% APY`,
+        `Use deposit ID ${depositId} to check yield or withdraw`,
+        `Projections show total value (principal + yield) for each time period`
+      ]
+    });
+
+  } catch (error) {
+    console.error('Yield deposit error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.reason || error.code
+    });
   }
 });
 
