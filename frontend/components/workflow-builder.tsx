@@ -382,7 +382,25 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
         </div>
       )}
 
-      <AIChatModal open={isAIChatOpen} onOpenChange={setIsAIChatOpen} />
+      <AIChatModal
+        open={isAIChatOpen}
+        onOpenChange={setIsAIChatOpen}
+        onApplyWorkflow={(nodes, edges) => {
+          // Clear existing workflow and apply AI-generated workflow
+          setNodes(nodes)
+          setEdges(edges)
+          // Fit view to show all nodes
+          setTimeout(() => {
+            if (reactFlowInstance) {
+              reactFlowInstance.fitView({ padding: 0.2 })
+            }
+          }, 100)
+          toast({
+            title: "Workflow applied",
+            description: "AI-generated workflow has been applied to the canvas",
+          })
+        }}
+      />
 
       <AlertDialog open={showExitDialog} onOpenChange={setShowExitDialog}>
         <AlertDialogContent>
@@ -405,7 +423,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
       </AlertDialog>
 
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <DialogHeader>
             <DialogTitle>{agentId ? "Update Agent" : "Create Agent"}</DialogTitle>
             <DialogDescription>

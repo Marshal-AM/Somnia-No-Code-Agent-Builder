@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useState, useRef, useEffect } from "react"
-import { Send, Bot, User } from "lucide-react"
+import { Send, Bot, User, CheckCircle } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -13,20 +13,23 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { isValidAIWorkflowResponse, aiResponseToWorkflow } from "@/lib/ai-workflow-converter"
 
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   timestamp: Date
+  aiResponse?: any // Store the AI response if it's a workflow
 }
 
 interface AIChatModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onApplyWorkflow?: (nodes: any[], edges: any[]) => void
 }
 
-export function AIChatModal({ open, onOpenChange }: AIChatModalProps) {
+export function AIChatModal({ open, onOpenChange, onApplyWorkflow }: AIChatModalProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -37,6 +40,7 @@ export function AIChatModal({ open, onOpenChange }: AIChatModalProps) {
   ])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [currentAIResponse, setCurrentAIResponse] = useState<any>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -63,20 +67,75 @@ export function AIChatModal({ open, onOpenChange }: AIChatModalProps) {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const userQuery = input.trim()
     setInput("")
     setIsLoading(true)
+    setCurrentAIResponse(null)
 
-    // Simulate AI response (placeholder)
-    setTimeout(() => {
+    try {
+      const response = await fetch('/api/create-workflow', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_query: userQuery,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      // Check if it's a valid workflow response
+      if (isValidAIWorkflowResponse(data)) {
+        setCurrentAIResponse(data)
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: `Here is your agent flow:\n\n${data.description || 'Workflow generated successfully'}\n\nTools: ${data.tools.map((t: any) => t.name || t.type).join(', ')}`,
+          timestamp: new Date(),
+          aiResponse: data,
+        }
+        setMessages((prev) => [...prev, aiMessage])
+      } else {
+        // Regular text response
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: data.message || data.content || "I received your request, but couldn't generate a workflow. Please try again.",
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, aiMessage])
+      }
+    } catch (error: any) {
+      console.error('Error calling AI workflow API:', error)
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: "This is a placeholder response. In the future, this will generate your workflow based on your description.",
+        content: `Sorry, I encountered an error: ${error.message || 'Failed to generate workflow'}. Please try again.`,
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, aiMessage])
+    } finally {
       setIsLoading(false)
-    }, 1000)
+    }
+  }
+
+  const handleApplyWorkflow = (aiResponse: any) => {
+    if (!aiResponse || !onApplyWorkflow) return
+
+    try {
+      const { nodes, edges } = aiResponseToWorkflow(aiResponse)
+      onApplyWorkflow(nodes, edges)
+      setCurrentAIResponse(null)
+      onOpenChange(false)
+    } catch (error: any) {
+      console.error('Error applying workflow:', error)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -123,6 +182,19 @@ export function AIChatModal({ open, onOpenChange }: AIChatModalProps) {
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">
                     {message.content}
                   </p>
+                  {message.aiResponse && (
+                    <div className="mt-3 pt-3 border-t border-gray-300/50">
+                      <Button
+                        onClick={() => handleApplyWorkflow(message.aiResponse)}
+                        size="sm"
+                        className="w-full"
+                        variant="default"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Apply the flow
+                      </Button>
+                    </div>
+                  )}
                   <span className="mt-1 block text-xs opacity-70">
                     {message.timestamp.toLocaleTimeString([], {
                       hour: "2-digit",
