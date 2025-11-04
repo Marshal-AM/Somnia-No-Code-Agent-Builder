@@ -5,7 +5,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
-import { Bot, MessageCircle, Calendar, Plus, LogOut, Loader2 } from "lucide-react"
+import { Bot, MessageCircle, Plus, LogOut, Loader2, MoreVertical, Download } from "lucide-react"
 import { useAuth } from "@/lib/auth"
 import { getAgentsByUserId, deleteAgent } from "@/lib/agents"
 import type { Agent } from "@/lib/supabase"
@@ -20,6 +20,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 export default function MyAgents() {
   const router = useRouter()
@@ -130,36 +136,57 @@ export default function MyAgents() {
             {agents.map((agent) => (
               <Card
                 key={agent.id}
-                className="cursor-pointer transition-all hover:shadow-md hover:border-primary/50"
-                onClick={() => handleAgentClick(agent.id)}
+                className="transition-all hover:shadow-md hover:border-primary/50"
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-1">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
                         <Bot className="h-5 w-5 text-primary" />
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <CardTitle className="text-lg">{agent.name}</CardTitle>
                       </div>
                     </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleAgentClick(agent.id)
+                          }}
+                        >
+                          Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteAgent(agent.id)
+                          }}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <CardDescription className="mt-2">
                     {agent.description || "No description"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                      <Calendar className="h-4 w-4" />
-                      <span>Created {new Date(agent.created_at).toLocaleDateString()}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground font-mono bg-gray-100 p-2 rounded">
-                      API Key: {agent.api_key.substring(0, 8)}...
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {agent.tools.length} tool(s) configured
-                    </div>
+                  <div className="text-xs text-muted-foreground">
+                    {agent.tools.length} tool(s) configured
                   </div>
                 </CardContent>
                 <CardFooter className="border-t pt-4 flex gap-2">
@@ -168,19 +195,24 @@ export default function MyAgents() {
                     className="flex-1"
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleAgentClick(agent.id)
+                      // Chat with Agent logic will be added later
+                      console.log(`Chat with agent: ${agent.id}`)
                     }}
                   >
-                    Edit
+                    <MessageCircle className="h-4 w-4 mr-2" />
+                    Chat with Agent
                   </Button>
                   <Button
-                    variant="destructive"
+                    variant="outline"
+                    className="flex-1"
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleDeleteAgent(agent.id)
+                      // Export Agent logic will be added later
+                      console.log(`Export agent: ${agent.id}`)
                     }}
                   >
-                    Delete
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Agent
                   </Button>
                 </CardFooter>
               </Card>

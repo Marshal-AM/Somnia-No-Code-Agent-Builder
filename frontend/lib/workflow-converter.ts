@@ -1,4 +1,5 @@
 import type { Node, Edge } from 'reactflow'
+import { generateNodeId, createNode } from './workflow-utils'
 
 /**
  * Convert ReactFlow nodes and edges to the tools format expected by the database
@@ -100,32 +101,41 @@ export function toolsToWorkflow(
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = []
   const edges: Edge[] = []
+  const toolToNodeId = new Map<string, string>()
 
-  // Create nodes for each tool
+  // First pass: Create all nodes with unique IDs
   tools.forEach((toolData, index) => {
-    const node: Node = {
-      id: `${toolData.tool}-${index + 1}`,
-      type: toolData.tool,
-      position: { x: 100 + index * 200, y: 100 },
-      data: {
-        label: toolData.tool,
-      },
+    const nodeId = generateNodeId(toolData.tool)
+    toolToNodeId.set(toolData.tool, nodeId)
+    
+    // Position nodes in a grid layout
+    const row = Math.floor(index / 3)
+    const col = index % 3
+    const position = {
+      x: col * 250 + 100,
+      y: row * 150 + 100,
     }
+    
+    const node = createNode({
+      type: toolData.tool,
+      position,
+      id: nodeId,
+    })
+    
     nodes.push(node)
   })
 
-  // Create edges based on next_tool relationships
-  tools.forEach((toolData, index) => {
+  // Second pass: Create edges based on next_tool relationships
+  tools.forEach((toolData) => {
     if (toolData.next_tool) {
-      // Find the target node
-      const targetIndex = tools.findIndex((t) => t.tool === toolData.next_tool)
-      if (targetIndex !== -1) {
-        const sourceNode = nodes[index]
-        const targetNode = nodes[targetIndex]
+      const sourceNodeId = toolToNodeId.get(toolData.tool)
+      const targetNodeId = toolToNodeId.get(toolData.next_tool)
+      
+      if (sourceNodeId && targetNodeId) {
         edges.push({
-          id: `edge-${sourceNode.id}-${targetNode.id}`,
-          source: sourceNode.id,
-          target: targetNode.id,
+          id: `edge-${sourceNodeId}-${targetNodeId}`,
+          source: sourceNodeId,
+          target: targetNodeId,
           type: 'custom',
         })
       }

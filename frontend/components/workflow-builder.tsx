@@ -32,7 +32,7 @@ import type { WorkflowNode } from "@/lib/types"
 import { AIChatModal } from "./ai-chat-modal"
 import { useAuth } from "@/lib/auth"
 import { createAgent, getAgentById, updateAgent } from "@/lib/agents"
-import { workflowToTools } from "@/lib/workflow-converter"
+import { workflowToTools, toolsToWorkflow } from "@/lib/workflow-converter"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -222,6 +222,8 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
           description: "Your agent has been updated successfully",
         })
         setShowSaveDialog(false)
+        // Redirect to my-agents page
+        router.push("/my-agents")
       } else {
         // Create new agent
         if (!user?.id) {
@@ -238,8 +240,8 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
           description: "Your agent has been created successfully",
         })
         setShowSaveDialog(false)
-        // Redirect to my-agents or stay on builder with the agent ID
-        router.push(`/agent-builder?agent=${agent.id}`)
+        // Redirect to my-agents page
+        router.push("/my-agents")
       }
     } catch (error: any) {
       console.error("Error saving agent:", error)
@@ -295,8 +297,20 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
 
         setAgentName(agent.name)
         setAgentDescription(agent.description || "")
-        // TODO: Convert tools back to workflow format using toolsToWorkflow
-        // For now, we'll keep the current workflow and just show the agent info
+        
+        // Convert tools back to workflow format and display on canvas
+        if (agent.tools && agent.tools.length > 0) {
+          const { nodes: loadedNodes, edges: loadedEdges } = toolsToWorkflow(agent.tools)
+          setNodes(loadedNodes)
+          setEdges(loadedEdges)
+          
+          // Fit view to show all nodes after loading
+          setTimeout(() => {
+            if (reactFlowInstance) {
+              reactFlowInstance.fitView({ padding: 0.2 })
+            }
+          }, 100)
+        }
       }
     } catch (error) {
       console.error("Error loading agent:", error)
