@@ -1,12 +1,12 @@
 "use client"
 
 import { useRouter, useSearchParams } from "next/navigation"
-import { useEffect } from "react"
+import { useEffect, Suspense } from "react"
 import WorkflowBuilder from "@/components/workflow-builder"
 import { useAuth } from "@/lib/auth"
 import { Loader2 } from "lucide-react"
 
-export default function AgentBuilder() {
+function AgentBuilderContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const agentId = searchParams.get("agent")
@@ -39,6 +39,23 @@ export default function AgentBuilder() {
         <WorkflowBuilder agentId={agentId || undefined} />
       </div>
     </main>
+  )
+}
+
+export default function AgentBuilder() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen flex-col items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+            <p className="mt-4 text-muted-foreground">Loading...</p>
+          </div>
+        </main>
+      }
+    >
+      <AgentBuilderContent />
+    </Suspense>
   )
 }
 
