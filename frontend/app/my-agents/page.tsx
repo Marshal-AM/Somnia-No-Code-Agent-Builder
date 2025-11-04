@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
 import { Bot, MessageCircle, Calendar, Plus, LogOut, Loader2 } from "lucide-react"
 import { useAuth } from "@/lib/auth"
-import { getAgentsByUserId, deleteAgent, type Agent } from "@/lib/agents"
+import { getAgentsByUserId, deleteAgent } from "@/lib/agents"
+import type { Agent } from "@/lib/supabase"
+import { AgentWallet } from "@/components/agent-wallet"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -92,7 +94,7 @@ export default function MyAgents() {
     <main className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">My Agents</h1>
             <p className="text-muted-foreground mt-2">
@@ -111,6 +113,11 @@ export default function MyAgents() {
               Logout
             </Button>
           </div>
+        </div>
+
+        {/* Agent Wallet Section */}
+        <div className="mb-8">
+          <AgentWallet />
         </div>
 
         {/* Agents Grid */}

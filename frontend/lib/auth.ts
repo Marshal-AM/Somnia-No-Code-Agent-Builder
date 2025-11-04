@@ -48,6 +48,7 @@ export function useAuth() {
           .insert({
             id: user.id,
             private_key: null,
+            wallet_address: null,
           })
           .select()
           .single()

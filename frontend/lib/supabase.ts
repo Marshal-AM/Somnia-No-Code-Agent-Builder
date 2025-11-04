@@ -12,6 +12,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey)
 export interface User {
   id: string // UUID from Privy
   private_key: string | null
+  wallet_address: string | null
   created_at: string
   updated_at: string
 }
