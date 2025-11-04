@@ -28,7 +28,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "toAddress", "amount", "tokenAddress"]
         },
-        "endpoint": "http://localhost:3000/transfer",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/transfer",
         "method": "POST"
     },
     "swap": {
@@ -45,7 +45,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "tokenIn", "tokenOut", "amountIn", "slippageTolerance"]
         },
-        "endpoint": "http://localhost:3000/swap",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/swap",
         "method": "POST"
     },
     "get_balance": {
@@ -58,7 +58,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["address"]
         },
-        "endpoint": "http://localhost:3000/balance/{address}",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/balance/{address}",
         "method": "GET"
     },
     "deploy_erc20": {
@@ -74,7 +74,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "name", "symbol", "initialSupply"]
         },
-        "endpoint": "http://localhost:3000/deploy-token",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/deploy-token",
         "method": "POST"
     },
     "deploy_erc721": {
@@ -89,7 +89,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "name", "symbol"]
         },
-        "endpoint": "http://localhost:3000/create-nft-collection",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/create-nft-collection",
         "method": "POST"
     },
     "create_dao": {
@@ -105,7 +105,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "name", "votingPeriod", "quorumPercentage"]
         },
-        "endpoint": "http://localhost:3000/create-dao",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/create-dao",
         "method": "POST"
     },
     "airdrop": {
@@ -120,7 +120,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "recipients", "amount"]
         },
-        "endpoint": "http://localhost:3000/airdrop",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/airdrop",
         "method": "POST"
     },
     "fetch_price": {
@@ -133,7 +133,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["query"]
         },
-        "endpoint": "http://localhost:3000/token-price",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/token-price",
         "method": "POST"
     },
     "deposit_yield": {
@@ -149,7 +149,7 @@ TOOL_DEFINITIONS = {
             },
             "required": ["privateKey", "tokenAddress", "depositAmount", "apyPercent"]
         },
-        "endpoint": "http://localhost:3000/yield",
+        "endpoint": "https://somniabackend-739298578243.us-central1.run.app/yield",
         "method": "POST"
     },
     "wallet_analytics": {
