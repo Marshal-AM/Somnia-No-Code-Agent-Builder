@@ -344,16 +344,16 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
                 <div className="flex gap-2">
                   <Button
                     onClick={handleBackClick}
-                    size="default"
+                    size="lg"
                     variant="outline"
                     className="font-medium"
                   >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    <ArrowLeft className="h-5 w-5 mr-2" />
                     Back
                   </Button>
                   <Button
                     onClick={() => setIsAIChatOpen(true)}
-                    size="default"
+                    size="lg"
                     variant="default"
                     className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg font-semibold"
                   >
@@ -362,8 +362,8 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
                 </div>
               </Panel>
               <Panel position="top-right">
-                <Button onClick={handleSaveClick} size="sm" variant="outline" disabled={loadingAgent}>
-                  <Save className="h-4 w-4 mr-2" />
+                <Button onClick={handleSaveClick} size="lg" variant="outline" disabled={loadingAgent}>
+                  <Save className="h-5 w-5 mr-2" />
                   {agentId ? "Update Agent" : "Save Agent"}
                 </Button>
               </Panel>
@@ -405,7 +405,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
       </AlertDialog>
 
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{agentId ? "Update Agent" : "Create Agent"}</DialogTitle>
             <DialogDescription>
@@ -432,6 +432,17 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
                 onChange={(e) => setAgentDescription(e.target.value)}
                 rows={3}
               />
+            </div>
+            <div className="space-y-2">
+              <Label>Tools to be saved</Label>
+              <div className="p-3 bg-gray-50 rounded-md border border-gray-200">
+                <pre className="text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(workflowToTools(nodes, edges), null, 2)}
+                </pre>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                This is the tools array that will be saved to Supabase
+              </p>
             </div>
           </div>
           <DialogFooter>

@@ -58,12 +58,6 @@ export const ToolNode = memo(({ data, type, isConnectable }: NodeProps<NodeData>
         </div>
       </div>
 
-      {data.config && (
-        <div className="mt-2 text-xs bg-gray-100 p-1 rounded">
-          {typeof data.config === "string" ? data.config : JSON.stringify(data.config)}
-        </div>
-      )}
-
       <Handle type="target" position={Position.Top} isConnectable={isConnectable} className="w-3 h-3" />
       <Handle type="source" position={Position.Bottom} isConnectable={isConnectable} className="w-3 h-3" />
     </div>
