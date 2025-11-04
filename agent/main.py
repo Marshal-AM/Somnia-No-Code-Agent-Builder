@@ -271,9 +271,9 @@ def execute_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         if method == "POST":
-            response = requests.post(endpoint, json=parameters, headers=headers, timeout=30)
+            response = requests.post(endpoint, json=parameters, headers=headers, timeout=60)
         elif method == "GET":
-            response = requests.get(endpoint, headers=headers, timeout=30)
+            response = requests.get(endpoint, headers=headers, timeout=60)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
         
