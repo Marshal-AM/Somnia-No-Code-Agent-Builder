@@ -8,7 +8,7 @@ The platform supports 10 blockchain tools including **token transfers, swaps, to
 
 ## Resources
 
-* **Pitch Deck** : [View Here](https://www.canva.com/design/DAG31cRK5wY/FolpicleXo_Cw4IrpTAKAQ/view?utm_content=DAG31cRK5wY&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h90251dbeda#5)
+* **Pitch Deck** : [View Here](https://www.canva.com/design/DAG31cRK5wY/FolpicleXo_Cw4IrpTAKAQ/view?utm_content=DAG31cRK5wY&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h90251dbeda#1)
 * **Demo Video** : [View Here](https://youtu.be/jbIAx5w-S90)
 * **Live Demo** : [View Here](https://somnia-agent-builder.vercel.app)
   
