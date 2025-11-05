@@ -254,7 +254,7 @@ export default function MyAgents() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground">
+            <AlertDialogAction onClick={confirmDelete} className="bg-primary text-primary-foreground">
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
