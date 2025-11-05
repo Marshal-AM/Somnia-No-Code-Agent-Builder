@@ -2,7 +2,7 @@
 
 ## Introduction
 
-**Somnia No-Code Agent Builder** is a comprehensive no-code platform that enables users to build, deploy, and interact with AI-powered blockchain agents on the Somnia testnet. The platform provides a visual workflow builder interface where users can create sophisticated blockchain automation workflows without writing code.
+**Somnia No-Code Agent Builder** is a no-code platform that enables users to build, deploy, and interact with AI-powered blockchain agents on the Somnia testnet. The platform provides a visual workflow builder interface where users can create sophisticated blockchain automation workflows without writing code.
 
 The platform consists of four main components:
 
@@ -15,7 +15,7 @@ The platform supports 10 blockchain tools including **token transfers, swaps, to
 
 ### Deployed Tool Contracts
 
-All smart contracts are deployed on the Somnia testnet. View them on the [Shannon Explorer](https://shannon-explorer.somnia.network):
+All smart contracts are deployed on the Somnia Shannon testnet. View them on the Explorer:
 
 | Contract | Address | Explorer Link |
 |----------|---------|---------------|
@@ -24,7 +24,6 @@ All smart contracts are deployed on the Somnia testnet. View them on the [Shanno
 | **DAOFactory** | `0xc6D49E765576134495ee49e572d5cBCb83a330Dc` | [View on Explorer](https://shannon-explorer.somnia.network/address/0xc6D49E765576134495ee49e572d5cBCb83a330Dc) |
 | **Airdrop** | `0x70F3147fa7971033312911a59579f18Ff0FE26F9` | [View on Explorer](https://shannon-explorer.somnia.network/address/0x70F3147fa7971033312911a59579f18Ff0FE26F9) |
 | **YieldCalculator** | `0x9bb2363810156f7b32b255677e8C1852AC1F95E6` | [View on Explorer](https://shannon-explorer.somnia.network/address/0x9bb2363810156f7b32b255677e8C1852AC1F95E6) |
-| **Swap Router** | `0x6aac14f090a35eea150705f72d90e4cdc4a49b2c` | [View on Explorer](https://shannon-explorer.somnia.network/address/0x6aac14f090a35eea150705f72d90e4cdc4a49b2c) |
 
 ---
 
@@ -35,9 +34,26 @@ Getting started with Somnia No-Code Agent Builder is simple! Follow these steps:
 1. **Visit** [https://somnia-agent-builder.vercel.app](https://somnia-agent-builder.vercel.app)
 2. **Get Started** with just a Google sign in.
 3. **Create an Agent Wallet** or Import your own wallet from private key.
+   
+   <img width="1470" height="913" alt="Screenshot 2025-11-05 at 3 55 35 PM" src="https://github.com/user-attachments/assets/6949d8b9-380b-468c-8be4-6c13df0430a0" />
+
 4. **Create Your First Agent** by just drag-dropping the tools you need!
-5. **Save your agent**.
-6. **Interact with it** in the UI or with curl requests by using your private key.
+   
+   <img width="1470" height="919" alt="Screenshot 2025-11-05 at 3 57 10 PM" src="https://github.com/user-attachments/assets/b402548a-9509-4e36-8a50-3e168616744f" />
+
+5. **You Can Also AI Generate Your Agent!** just ask our AI to generate your agent with the right tools.
+   
+   <img width="1470" height="919" alt="Screenshot 2025-11-05 at 3 58 19 PM" src="https://github.com/user-attachments/assets/6e660f4d-0c49-439b-87f8-ab8bce482a5c" />
+
+6. **Save your agent**.
+
+   <img width="1470" height="919" alt="Screenshot 2025-11-05 at 3 57 43 PM" src="https://github.com/user-attachments/assets/f877450d-9bd4-428b-8cbe-f35af87d4752" />
+
+7. **Interact with it** in the UI or with curl requests by using your api key.
+   
+   <img width="1470" height="919" alt="Screenshot 2025-11-05 at 4 00 16 PM" src="https://github.com/user-attachments/assets/709a69d3-0c6f-4a0b-b939-ac3e59efcc71" />
+
+   <img width="1385" height="483" alt="Screenshot 2025-11-05 at 4 00 37 PM" src="https://github.com/user-attachments/assets/6dc16a6d-cbf8-4baa-9028-ae1b2fdd14cc" />
 
 That's it! You've created your first Somnia agent without any programming knowledge, as simple as that!
 
