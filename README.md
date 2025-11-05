@@ -1273,7 +1273,7 @@ graph TB
 
 ## License
 
-MIT License - See LICENSE file for details
+MIT License
 
 ---
 
