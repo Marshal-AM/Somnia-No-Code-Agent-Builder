@@ -27,6 +27,7 @@ import NodeLibrary from "./node-library"
 import NodeConfigPanel from "./node-config-panel"
 import CustomEdge from "./custom-edge"
 import { ToolNode } from "./nodes/tool-node"
+import { AgentNode } from "./nodes/agent-node"
 import { generateNodeId, createNode } from "@/lib/workflow-utils"
 import type { WorkflowNode } from "@/lib/types"
 import { AIChatModal } from "./ai-chat-modal"
@@ -69,6 +70,7 @@ const toolTypes = [
 ]
 
 const nodeTypes: NodeTypes = {
+  agent: AgentNode,
   transfer: ToolNode,
   swap: ToolNode,
   get_balance: ToolNode,
@@ -89,11 +91,28 @@ interface WorkflowBuilderProps {
   agentId?: string
 }
 
+const AGENT_NODE_ID = "agent-node"
+
+// Create the initial agent node
+const createAgentNode = (): Node => ({
+  id: AGENT_NODE_ID,
+  type: "agent",
+  position: { x: 100, y: 100 },
+  data: {
+    label: "Agent",
+    description: "Your agent",
+    config: {},
+  },
+  draggable: true,
+  selectable: true,
+  deletable: false,
+})
+
 export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
   const router = useRouter()
   const { user, authenticated } = useAuth()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
+  const [nodes, setNodes, onNodesChange] = useNodesState([createAgentNode()])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null)
@@ -104,6 +123,30 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
   const [agentDescription, setAgentDescription] = useState("")
   const [loadingAgent, setLoadingAgent] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // Wrapper for onNodesChange to prevent agent node deletion
+  const handleNodesChange = useCallback(
+    (changes: any[]) => {
+      // Filter out any delete operations on the agent node
+      const filteredChanges = changes.filter((change) => {
+        if (change.type === "remove" && change.id === AGENT_NODE_ID) {
+          return false
+        }
+        return true
+      })
+      onNodesChange(filteredChanges)
+      
+      // Ensure agent node always exists
+      setNodes((nds) => {
+        const hasAgentNode = nds.some((node) => node.id === AGENT_NODE_ID)
+        if (!hasAgentNode) {
+          return [...nds, createAgentNode()]
+        }
+        return nds
+      })
+    },
+    [onNodesChange, setNodes],
+  )
 
   const onConnect = useCallback(
     (params: Edge | Connection) => setEdges((eds) => addEdge({ ...params, type: "custom" }, eds)),
@@ -139,10 +182,30 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
           id: generateNodeId(type),
         })
 
-        setNodes((nds) => nds.concat(newNode))
+        setNodes((nds) => {
+          const updatedNodes = nds.concat(newNode)
+          // Auto-connect new node to agent node if it's a starting node
+          // (nodes with no incoming edges will be connected to agent)
+          setEdges((eds) => {
+            // Check if this node already has incoming edges
+            const hasIncoming = eds.some((edge) => edge.target === newNode.id)
+            // If no incoming edges, connect to agent node
+            if (!hasIncoming) {
+              const agentEdge: Edge = {
+                id: `edge-${AGENT_NODE_ID}-${newNode.id}`,
+                source: AGENT_NODE_ID,
+                target: newNode.id,
+                type: "custom",
+              }
+              return [...eds, agentEdge]
+            }
+            return eds
+          })
+          return updatedNodes
+        })
       }
     },
-    [reactFlowInstance, setNodes, toolTypes],
+    [reactFlowInstance, setNodes, setEdges],
   )
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
@@ -174,7 +237,9 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
   )
 
   const handleSaveClick = () => {
-    if (nodes.length === 0) {
+    // Check if there are any tool nodes (excluding agent node)
+    const toolNodes = nodes.filter((node) => node.id !== AGENT_NODE_ID)
+    if (toolNodes.length === 0) {
       toast({
         title: "Nothing to save",
         description: "Add some tools to your workflow first",
@@ -208,7 +273,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
 
     setSaving(true)
     try {
-      const tools = workflowToTools(nodes, edges)
+      const tools = workflowToTools(nodes, edges, AGENT_NODE_ID)
 
       if (agentId) {
         // Update existing agent
@@ -258,7 +323,10 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
 
 
   const handleBackClick = () => {
-    const hasUnsavedChanges = nodes.length > 0 || edges.length > 0
+    // Check for unsaved changes (excluding agent node)
+    const toolNodes = nodes.filter((node) => node.id !== AGENT_NODE_ID)
+    const toolEdges = edges.filter((edge) => edge.source !== AGENT_NODE_ID && edge.target !== AGENT_NODE_ID)
+    const hasUnsavedChanges = toolNodes.length > 0 || toolEdges.length > 0
     if (hasUnsavedChanges) {
       setShowExitDialog(true)
     } else {
@@ -300,8 +368,10 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
         
         // Convert tools back to workflow format and display on canvas
         if (agent.tools && agent.tools.length > 0) {
-          const { nodes: loadedNodes, edges: loadedEdges } = toolsToWorkflow(agent.tools)
-          setNodes(loadedNodes)
+          const { nodes: loadedNodes, edges: loadedEdges } = toolsToWorkflow(agent.tools, AGENT_NODE_ID)
+          // Ensure agent node is included
+          const allNodes = [createAgentNode(), ...loadedNodes]
+          setNodes(allNodes)
           setEdges(loadedEdges)
           
           // Fit view to show all nodes after loading
@@ -310,6 +380,10 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
               reactFlowInstance.fitView({ padding: 0.2 })
             }
           }, 100)
+        } else {
+          // Even if no tools, ensure agent node exists
+          setNodes([createAgentNode()])
+          setEdges([])
         }
       }
     } catch (error) {
@@ -336,7 +410,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
             <ReactFlow
               nodes={nodes}
               edges={edges}
-              onNodesChange={onNodesChange}
+              onNodesChange={handleNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onInit={setReactFlowInstance}
@@ -386,7 +460,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
         </div>
       </div>
 
-      {selectedNode && (
+      {selectedNode && selectedNode.id !== AGENT_NODE_ID && (
         <div className="w-80 border-l border-gray-200 p-4 bg-gray-50">
           <NodeConfigPanel
             node={selectedNode as WorkflowNode}
@@ -399,10 +473,30 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
       <AIChatModal
         open={isAIChatOpen}
         onOpenChange={setIsAIChatOpen}
-        onApplyWorkflow={(nodes, edges) => {
-          // Clear existing workflow and apply AI-generated workflow
-          setNodes(nodes)
-          setEdges(edges)
+        onApplyWorkflow={(aiNodes, aiEdges) => {
+          // Ensure agent node is included and connect starting nodes to it
+          const agentNode = createAgentNode()
+          const allNodes = [agentNode, ...aiNodes]
+          
+          // Find starting nodes (nodes with no incoming edges)
+          const nodesWithIncoming = new Set<string>()
+          aiEdges.forEach((edge) => {
+            nodesWithIncoming.add(edge.target)
+          })
+          
+          // Connect all starting nodes to agent node
+          const agentEdges: Edge[] = aiNodes
+            .filter((node) => !nodesWithIncoming.has(node.id))
+            .map((node) => ({
+              id: `edge-${AGENT_NODE_ID}-${node.id}`,
+              source: AGENT_NODE_ID,
+              target: node.id,
+              type: "custom" as const,
+            }))
+          
+          setNodes(allNodes)
+          setEdges([...agentEdges, ...aiEdges])
+          
           // Fit view to show all nodes
           setTimeout(() => {
             if (reactFlowInstance) {
@@ -469,7 +563,7 @@ export default function WorkflowBuilder({ agentId }: WorkflowBuilderProps) {
               <Label>Tools to be saved</Label>
               <div className="p-3 bg-gray-50 rounded-md border border-gray-200">
                 <pre className="text-xs font-mono overflow-x-auto whitespace-pre-wrap">
-                  {JSON.stringify(workflowToTools(nodes, edges), null, 2)}
+                  {JSON.stringify(workflowToTools(nodes, edges, AGENT_NODE_ID), null, 2)}
                 </pre>
               </div>
               <p className="text-xs text-muted-foreground">
