@@ -40,9 +40,6 @@ The platform supports 10 blockchain tools including token transfers, swaps, toke
    - [DAOFactory & DAO](#daofactory--dao)
    - [Airdrop Contract](#airdrop-contract)
    - [YieldCalculator Contract](#yieldcalculator-contract)
-5. [API Documentation](#api-documentation)
-6. [Setup & Installation](#setup--installation)
-7. [Usage Examples](#usage-examples)
 
 ---
 
